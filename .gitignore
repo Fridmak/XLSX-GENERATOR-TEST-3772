@@ -1,0 +1,51 @@
+# Ignore build outputs
+bin/
+obj/
+
+# Ignore Visual Studio files
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Ignore Rider files
+.idea/
+*.ipr
+*.iws
+*.iml
+
+# Ignore BenchmarkDotNet artifacts
+BenchmarkDotNet.Artifacts/
+
+# Ignore NuGet packages
+packages/
+
+# Ignore local config
+appsettings.Development.json
+appsettings.Local.json
+
+# Ignore temporary files
+*.tmp
+*.log
+
+# Ignore .NET Core runtime files
+*.runtimeconfig.json
+*.deps.json
+
+# Ignore user-specific files
+*.json
+!appsettings.json
+!appsettings.Development.json
+!appsettings.Production.json
+
+# Ignore VS Code settings if any
+.vscode/
+
+# Ignore Docker files if any
+Dockerfile
+docker-compose.yml
+
+# Ignore other IDEs
+*.swp
+*.swo
