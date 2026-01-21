@@ -1,4 +1,6 @@
 using Analitics6400.Dal;
+using Analitics6400.Dal.Services;
+using Analitics6400.Dal.Services.Interfaces;
 using Analitics6400.Logic.Seed;
 using Analitics6400.Logic.Services;
 using Analitics6400.Logic.Services.XmlWriters;
@@ -15,7 +17,8 @@ builder.Services.AddDbContext<DocumentDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"));
 });
 
-builder.Services.AddScoped<DocumentSeeder>();
+builder.Services.AddTransient<DocumentSeeder>();
+builder.Services.AddTransient<IDocumentProvider, DocumentDalProvider>();
 
 builder.Services.AddTransient<IXmlTest, XmlTest<AbankingOpenXmlWriter>>();
 builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriter>>();

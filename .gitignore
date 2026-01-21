@@ -49,3 +49,6 @@ docker-compose.yml
 # Ignore other IDEs
 *.swp
 *.swo
+
+# Ignore BenchmarkDotNet artifacts
+BenchmarkDotNet.Artifacts/

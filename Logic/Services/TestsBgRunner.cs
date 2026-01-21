@@ -4,15 +4,19 @@ namespace Analitics6400.Logic.Services;
 
 public class TestsBgRunner : BackgroundService
 {
-    private readonly IEnumerable<IXmlTest> _xmlTestRunners;
+    private readonly IServiceScopeFactory _scopeFactory;
 
-    public TestsBgRunner(IEnumerable<IXmlTest> xmlTestRunners)
+    public TestsBgRunner(IServiceScopeFactory scopeFactory)
     {
-        _xmlTestRunners = xmlTestRunners;
+        _scopeFactory = scopeFactory;
     }
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        foreach (var testRunner in _xmlTestRunners)
+        using var scope = _scopeFactory.CreateScope();
+
+        var testRunners = scope.ServiceProvider.GetServices<IXmlTest>();
+
+        foreach (var testRunner in testRunners)
         {
             await testRunner.RunAsync();
 

@@ -33,7 +33,7 @@ namespace Analitics6400.Logic.Services.XmlWriters
 
             var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
 
-            using (var writer = DocumentFormat.OpenXml.OpenXmlWriter.Create(worksheetPart))
+            using (var writer = OpenXmlWriter.Create(worksheetPart))
             {
                 writer.WriteStartElement(new Worksheet());
                 writer.WriteStartElement(new SheetData());
