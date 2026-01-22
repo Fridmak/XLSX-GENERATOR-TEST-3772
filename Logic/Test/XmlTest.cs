@@ -28,6 +28,7 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
             new("Published", typeof(DateTime?)),
             new("IsArchived", typeof(bool)),
             new("Version", typeof(double)),
+            new("JsonData", typeof(string)),
             new("IsCanForValidate", typeof(bool)),
             new("ChangedDateUtc", typeof(DateTime?))
         };

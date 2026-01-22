@@ -25,6 +25,7 @@ public sealed class DocumentDalProvider : IDocumentProvider
                 Published = d.Published,
                 IsArchived = d.IsArchived,
                 Version = d.Version,
+                JsonData = d.JsonData,
                 IsCanForValidate = d.IsCanForValidate,
                 ChangedDateUtc = d.ChangedDateUtc
             })

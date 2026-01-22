@@ -7,6 +7,7 @@ public record DocumentDtoModel
     public DateTime? Published { get; init; }
     public bool IsArchived { get; init; }
     public double Version { get; init; }
+    public string? JsonData { get; init; }
     public bool IsCanForValidate { get; init; }
     public DateTime? ChangedDateUtc { get; init; }
 }

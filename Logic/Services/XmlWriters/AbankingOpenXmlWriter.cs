@@ -23,57 +23,63 @@ namespace Analitics6400.Logic.Services.XmlWriters
 
             await using var stream = new MemoryStream(32 * 1024 * 1024);
 
-            using var document = SpreadsheetDocument.Create(
-                stream,
-                SpreadsheetDocumentType.Workbook,
-                autoSave: true);
+            byte[] result;
 
-            var workbookPart = document.AddWorkbookPart();
-            workbookPart.Workbook = new Workbook();
-
-            var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
-
-            using (var writer = OpenXmlWriter.Create(worksheetPart))
+            using (var document = SpreadsheetDocument.Create(
+                       stream,
+                       SpreadsheetDocumentType.Workbook,
+                       autoSave: false))
             {
-                writer.WriteStartElement(new Worksheet());
-                writer.WriteStartElement(new SheetData());
+                var workbookPart = document.AddWorkbookPart();
+                workbookPart.Workbook = new Workbook();
 
-                // Заголовки
-                WriteHeader(writer, columns);
+                var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
 
-                // Кэш делегатов для быстрого доступа к свойствам
-                var accessors = GetAccessors<T>(columns);
-
-                // Потоковая запись данных
-                await foreach (var row in rows.WithCancellation(ct))
+                using (var writer = OpenXmlWriter.Create(worksheetPart))
                 {
-                    writer.WriteStartElement(new Row());
+                    writer.WriteStartElement(new Worksheet());
+                    writer.WriteStartElement(new SheetData());
 
-                    for (int i = 0; i < columns.Count; i++)
+                    // Заголовки
+                    WriteHeader(writer, columns);
+
+                    // Кэш делегатов
+                    var accessors = GetAccessors<T>(columns);
+
+                    // Потоковая запись данных
+                    await foreach (var row in rows.WithCancellation(ct))
                     {
-                        var value = accessors[i](row!);
-                        WriteCell(writer, value, columns[i].Type);
+                        writer.WriteStartElement(new Row());
+
+                        for (int i = 0; i < columns.Count; i++)
+                        {
+                            var value = accessors[i](row!);
+                            WriteCell(writer, value);
+                        }
+
+                        writer.WriteEndElement(); // Row
                     }
 
-                    writer.WriteEndElement(); // Row
+                    writer.WriteEndElement(); // SheetData
+                    writer.WriteEndElement(); // Worksheet
                 }
 
-                writer.WriteEndElement(); // SheetData
-                writer.WriteEndElement(); // Worksheet
+                workbookPart.Workbook.AppendChild(new Sheets(
+                    new Sheet
+                    {
+                        Id = workbookPart.GetIdOfPart(worksheetPart),
+                        SheetId = 1,
+                        Name = "Sheet1"
+                    }));
+
+                workbookPart.Workbook.Save();
             }
 
-            workbookPart.Workbook.AppendChild(new Sheets(
-                new Sheet
-                {
-                    Id = workbookPart.GetIdOfPart(worksheetPart),
-                    SheetId = 1,
-                    Name = "Sheet1"
-                }));
-
-            return stream.ToArray();
+            result = stream.ToArray();
+            return result;
         }
 
-        private static void WriteHeader(DocumentFormat.OpenXml.OpenXmlWriter writer, IReadOnlyList<ExcelColumn> columns)
+        private static void WriteHeader(OpenXmlWriter writer, IReadOnlyList<ExcelColumn> columns)
         {
             writer.WriteStartElement(new Row());
 
@@ -98,26 +104,31 @@ namespace Analitics6400.Logic.Services.XmlWriters
                     .ToDictionary(p => p.Name, p => p);
 
                 return columns.Select(col =>
-                    props.TryGetValue(col.Name, out var prop)
-                        ? (Func<object, object?>)(obj => prop.GetValue(obj))
-                        : (_ => null)
-                ).ToArray();
+                        props.TryGetValue(col.Name, out var prop)
+                            ? (Func<object, object?>)(obj => prop.GetValue(obj))
+                            : (_ => null))
+                    .ToArray();
             });
         }
 
-        private static void WriteCell(DocumentFormat.OpenXml.OpenXmlWriter writer, object? value, Type type)
+        private static void WriteCell(OpenXmlWriter writer, object? value)
         {
+            if (value is null)
+            {
+                writer.WriteElement(new Cell());
+                return;
+            }
+
             switch (value)
             {
-                case null:
-                    writer.WriteElement(new Cell());
-                    break;
                 case string s:
                     WriteString(writer, s);
                     break;
+
                 case Guid g:
                     WriteString(writer, g.ToString());
                     break;
+
                 case bool b:
                     writer.WriteElement(new Cell
                     {
@@ -125,34 +136,33 @@ namespace Analitics6400.Logic.Services.XmlWriters
                         CellValue = new CellValue(b ? "1" : "0")
                     });
                     break;
+
                 case DateTime dt:
                     writer.WriteElement(new Cell
                     {
                         DataType = CellValues.Number,
-                        CellValue = new CellValue(dt.ToOADate().ToString(CultureInfo.InvariantCulture))
+                        CellValue = new CellValue(
+                            dt.ToOADate().ToString(CultureInfo.InvariantCulture))
                     });
                     break;
+
+                case sbyte or byte or short or ushort or int or uint or long or ulong
+                   or float or double or decimal:
+                    writer.WriteElement(new Cell
+                    {
+                        DataType = CellValues.Number,
+                        CellValue = new CellValue(
+                            Convert.ToString(value, CultureInfo.InvariantCulture)!)
+                    });
+                    break;
+
                 default:
-                    if (IsNumber(value))
-                    {
-                        writer.WriteElement(new Cell
-                        {
-                            DataType = CellValues.Number,
-                            CellValue = new CellValue(Convert.ToDouble(value).ToString(CultureInfo.InvariantCulture))
-                        });
-                    }
-                    else
-                    {
-                        WriteString(writer, value.ToString()!);
-                    }
+                    WriteString(writer, value.ToString()!);
                     break;
             }
         }
 
-        private static bool IsNumber(object value) =>
-            value is sbyte or byte or short or ushort or int or uint or long or ulong or float or double or decimal;
-
-        private static void WriteString(DocumentFormat.OpenXml.OpenXmlWriter writer, string value)
+        private static void WriteString(OpenXmlWriter writer, string value)
         {
             writer.WriteElement(new Cell
             {
