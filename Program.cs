@@ -20,9 +20,11 @@ builder.Services.AddDbContext<DocumentDbContext>(options =>
 builder.Services.AddTransient<DocumentSeeder>();
 builder.Services.AddTransient<IDocumentProvider, DocumentDalProvider>();
 
-builder.Services.AddTransient<IXmlTest, XmlTest<AbankingOpenXmlWriter>>();
-builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriter>>();
+//builder.Services.AddTransient<IXmlTest, XmlTest<AbankingOpenXmlWriter>>();
+//builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriter>>();
+builder.Services.AddTransient<IXmlTest, XmlTest<AbankingCsvWriter>>();
 
+builder.Services.AddTransient<IXmlWriter, AbankingCsvWriter>();
 builder.Services.AddTransient<IXmlWriter, AbankingOpenXmlWriter>();
 builder.Services.AddTransient<IXmlWriter, AbankingClosedXmlWriter>();
 
