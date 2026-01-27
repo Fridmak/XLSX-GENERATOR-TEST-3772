@@ -35,12 +35,12 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
 
         var rows = _documentProvider.GetDocumentsAsync();
 
-        var bytes = await _writer.GenerateAsync(rows, columns);
-
         var fileName = $"DocumentsReport_{DateTime.UtcNow:yyyyMMdd_HHmmss}.xlsx";
-        await File.WriteAllBytesAsync(fileName, bytes);
+        await using var fs = new FileStream(fileName, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 1024 * 1024);
 
-        Console.WriteLine($"Report generated: {fileName}, size: {bytes.Length} bytes");
+        await _writer.GenerateAsync(rows, columns, fs);
+
+        Console.WriteLine($"Report generated: {fileName}");
     }
 
 }
