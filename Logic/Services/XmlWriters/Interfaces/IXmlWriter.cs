@@ -4,7 +4,9 @@ namespace Analitics6400.Logic.Services.XmlWriters.Interfaces;
 
 public interface IXmlWriter
 {
-     Task GenerateAsync<T>(
+
+    string Extension { get; }
+    Task GenerateAsync<T>(
          IAsyncEnumerable<T> rows,
          IReadOnlyList<ExcelColumn> columns,
          Stream output,

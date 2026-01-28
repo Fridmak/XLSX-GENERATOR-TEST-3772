@@ -10,6 +10,14 @@ namespace Analitics6400.Logic.Services.XmlWriters;
 public sealed class AbankingClosedXmlWriter : IXmlWriter
 {
     private static readonly ConcurrentDictionary<(Type Type, string ColumnsKey), Func<object, object?>[]> _propertyAccessors = new();
+    private readonly ILogger<AbankingClosedXmlWriter> _logger;
+
+    public string Extension => ".xlsx";
+
+    public AbankingClosedXmlWriter(ILogger<AbankingClosedXmlWriter> logger)
+    {
+        _logger = logger;
+    }
 
     public async Task GenerateAsync<T>(
         IAsyncEnumerable<T> rows,

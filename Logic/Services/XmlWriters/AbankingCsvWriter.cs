@@ -10,6 +10,14 @@ namespace Analitics6400.Logic.Services.XmlWriters;
 public sealed class AbankingCsvWriter : IXmlWriter
 {
     private static readonly ConcurrentDictionary<(Type Type, string ColumnsKey), Func<object, object?>[]> _propertyAccessors = new();
+    private const int _flushInterval = 10000; 
+    private readonly ILogger<AbankingCsvWriter> _logger;
+    public string Extension => ".csv";
+
+    public AbankingCsvWriter(ILogger<AbankingCsvWriter> logger)
+    {
+        _logger = logger;
+    }
 
     public async Task GenerateAsync<T>(
         IAsyncEnumerable<T> rows,
@@ -18,9 +26,12 @@ public sealed class AbankingCsvWriter : IXmlWriter
         CancellationToken ct = default)
     {
         if (columns.Count == 0)
+        {
             throw new ArgumentException("Columns cannot be empty", nameof(columns));
+        }
 
-        // CSV почти всегда ожидают UTF8 без BOM
+        _logger.LogInformation("Начало генерации при помощи AbankingCsvWriter");
+
         using var writer = new StreamWriter(
             output,
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
@@ -35,6 +46,8 @@ public sealed class AbankingCsvWriter : IXmlWriter
 
         var accessors = GetAccessors<T>(columns);
 
+        var rowCount = 0;
+
         await foreach (var row in rows.WithCancellation(ct))
         {
             var values = new string?[columns.Count];
@@ -46,12 +59,20 @@ public sealed class AbankingCsvWriter : IXmlWriter
             }
 
             await WriteRowAsync(writer, values, ct);
+
+            rowCount++;
+            if (rowCount % _flushInterval == 0)
+            {
+                await writer.FlushAsync(ct);
+            }
         }
 
-        await writer.FlushAsync();
+        await writer.FlushAsync(ct);
+
+        _logger.LogInformation("Конец генерации при помощи AbankingCsvWriter");
     }
 
-    // ---------------- helpers ----------------
+    #region Helpers
 
     private static Func<object, object?>[] GetAccessors<T>(IReadOnlyList<ExcelColumn> columns)
     {
@@ -76,12 +97,14 @@ public sealed class AbankingCsvWriter : IXmlWriter
         IEnumerable<string?> values,
         CancellationToken ct)
     {
-        bool first = true;
+        var first = true;
 
         foreach (var value in values)
         {
             if (!first)
+            {
                 await writer.WriteAsync(',');
+            }
 
             await writer.WriteAsync(EscapeCsv(value));
             first = false;
@@ -94,25 +117,30 @@ public sealed class AbankingCsvWriter : IXmlWriter
     private static string EscapeCsv(string? value)
     {
         if (string.IsNullOrEmpty(value))
+        {
             return string.Empty;
+        }
 
-        bool mustQuote =
+        var mustQuote =
             value.Contains(',') ||
             value.Contains('"') ||
             value.Contains('\n') ||
             value.Contains('\r');
 
         if (!mustQuote)
+        {
             return value;
+        }
 
-        // экранируем кавычки
         return "\"" + value.Replace("\"", "\"\"") + "\"";
     }
 
     private static string? FormatValue(object? value)
     {
         if (value is null)
+        {
             return null;
+        }
 
         return value switch
         {
@@ -130,4 +158,5 @@ public sealed class AbankingCsvWriter : IXmlWriter
             _ => value.ToString()
         };
     }
+    #endregion
 }

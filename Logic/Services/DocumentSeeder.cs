@@ -5,10 +5,12 @@ namespace Analitics6400.Logic.Seed
     public class DocumentSeeder
     {
         private readonly DocumentDbContext _context;
+        private readonly ILogger<DocumentSeeder> _logger;
 
-        public DocumentSeeder(DocumentDbContext context)
+        public DocumentSeeder(DocumentDbContext context, ILogger<DocumentSeeder> logger)
         {
             _context = context;
+            _logger = logger;
         }
 
         public async Task SeedAsync(int totalDocuments = 100_000, int batchSize = 2000)
@@ -43,7 +45,7 @@ namespace Analitics6400.Logic.Seed
                 await _context.SaveChangesAsync();
                 await transaction.CommitAsync();
 
-                Console.WriteLine($"Batch {batch + 1}/{totalDocuments / batchSize} inserted");
+                _logger.LogInformation($"Batch {batch + 1}/{totalDocuments / batchSize} inserted");
             }
         }
 

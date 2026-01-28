@@ -3,5 +3,5 @@ namespace Analitics6400.Logic.Test.Interfaces;
 public interface IXmlTest
 {
     public string Name { get; }
-    public Task RunAsync();
+    public Task RunAsync(CancellationToken ct = default);
 }

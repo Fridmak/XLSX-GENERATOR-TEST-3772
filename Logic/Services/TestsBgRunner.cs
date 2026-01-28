@@ -5,10 +5,12 @@ namespace Analitics6400.Logic.Services;
 public class TestsBgRunner : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<TestsBgRunner> _logger;
 
-    public TestsBgRunner(IServiceScopeFactory scopeFactory)
+    public TestsBgRunner(IServiceScopeFactory scopeFactory, ILogger<TestsBgRunner> logger)
     {
         _scopeFactory = scopeFactory;
+        _logger = logger;
     }
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -20,7 +22,7 @@ public class TestsBgRunner : BackgroundService
         {
             await testRunner.RunAsync();
 
-            Console.WriteLine($"Test {testRunner.Name}");
+            _logger.LogInformation($"Test {testRunner.Name}");
         }
     }
 }

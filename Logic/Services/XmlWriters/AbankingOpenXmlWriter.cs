@@ -13,6 +13,14 @@ namespace Analitics6400.Logic.Services.XmlWriters
     public sealed class AbankingOpenXmlWriter : IXmlWriter
     {
         private static readonly ConcurrentDictionary<(Type Type, string ColumnsKey), Func<object, object?>[]> _propertyAccessors = new();
+        private readonly ILogger<AbankingOpenXmlWriter> _logger;
+
+        public string Extension => ".xlsx";
+
+        public AbankingOpenXmlWriter(ILogger<AbankingOpenXmlWriter> logger)
+        {
+            _logger = logger;
+        }
 
         private sealed record CellPlan(object? Value, string? Text, bool IsLongText, int ChunkCount);
 

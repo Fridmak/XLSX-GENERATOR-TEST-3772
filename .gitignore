@@ -52,3 +52,6 @@ docker-compose.yml
 
 # Ignore BenchmarkDotNet artifacts
 BenchmarkDotNet.Artifacts/
+
+#Ignore generated files
+DocumentsReport_*

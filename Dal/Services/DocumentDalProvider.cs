@@ -1,6 +1,8 @@
 using Analitics6400.Dal.Services.Interfaces;
 using Analitics6400.Logic.Models;
 using Microsoft.EntityFrameworkCore;
+using System.Runtime.CompilerServices;
+using System.Text;
 
 namespace Analitics6400.Dal.Services;
 
@@ -13,9 +15,9 @@ public sealed class DocumentDalProvider : IDocumentProvider
         _db = db;
     }
 
-    public IAsyncEnumerable<DocumentDtoModel> GetDocumentsAsync(CancellationToken ct = default)
+    public async IAsyncEnumerable<DocumentDtoModel> GetDocumentsAsync(int? limit = null, [EnumeratorCancellation] CancellationToken ct = default)
     {
-        return _db.Documents
+        var query = _db.Documents
             .AsNoTracking()
             .OrderBy(d => d.Id)
             .Select(d => new DocumentDtoModel
@@ -28,7 +30,24 @@ public sealed class DocumentDalProvider : IDocumentProvider
                 JsonData = d.JsonData,
                 IsCanForValidate = d.IsCanForValidate,
                 ChangedDateUtc = d.ChangedDateUtc
-            })
-            .AsAsyncEnumerable();
+            });
+
+
+        if (limit.HasValue)
+        {
+            query = query.Take(limit.Value);
+        }
+
+        int returned = 0;
+
+        await foreach (var doc in query.AsAsyncEnumerable().WithCancellation(ct))
+        {
+            yield return doc;
+
+            returned++;
+            if (limit.HasValue && returned >= limit.Value)
+                yield break;
+        }
     }
+
 }
