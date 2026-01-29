@@ -1,57 +1,94 @@
 using Analitics6400.Dal;
 using Analitics6400.Dal.Services;
 using Analitics6400.Dal.Services.Interfaces;
+using Analitics6400.Logic.Models;
 using Analitics6400.Logic.Seed;
 using Analitics6400.Logic.Services;
 using Analitics6400.Logic.Services.XmlWriters;
 using Analitics6400.Logic.Services.XmlWriters.Interfaces;
 using Analitics6400.Logic.Test;
 using Analitics6400.Logic.Test.Interfaces;
-using DocumentFormat.OpenXml.Office2016.Drawing.ChartDrawing;
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
 
-var builder = WebApplication.CreateBuilder(args);
-
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-
-var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
-dataSourceBuilder.EnableDynamicJson();
-var dataSource = dataSourceBuilder.Build();
-
-builder.Services.AddDbContext<DocumentDbContext>(options =>
+public class Programm
 {
-    options.UseNpgsql(dataSource);
-});
+    public static async Task Main(string[] args)
+    {
+        var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddTransient<DocumentSeeder>();
-builder.Services.AddTransient<IDocumentProvider, DocumentDalProvider>();
-//builder.Services.AddTransient<IDocumentProvider, NpgsqlDocumentDalProvider>();
+        ConfigureDataProviders(builder);
 
-//builder.Services.AddTransient<IDocumentProvider>(sp =>
-//    new MockDocumentDalProvider(documentCount: 100000));
+        builder.Services.AddTransient<DocumentSeeder>();
 
-//builder.Services.AddTransient<IXmlTest, XmlTest<AbankingOpenXmlWriter>>();
-//builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriter>>();
-//builder.Services.AddTransient<IXmlTest, XmlTest<AbankingCsvWriter>>();
-builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriterBenchmark>>();
+        ConfigureTestServices(builder);
 
-builder.Services.AddTransient<IXmlWriter, AbankingCsvWriter>();
-builder.Services.AddTransient<IXmlWriter, AbankingOpenXmlWriter>();
-builder.Services.AddTransient<IXmlWriter, AbankingClosedXmlWriter>();
-builder.Services.AddTransient<IXmlWriter, AbankingClosedXmlWriterBenchmark>();
+        builder.Services.AddHostedService<TestsBgRunner>();
 
-builder.Services.AddHostedService<TestsBgRunner>();
+        SetSettings(builder);
 
-var app = builder.Build();
+        var app = builder.Build();
 
-//using (var scope = app.Services.CreateScope()) // Генерация в бд
-//{
-//    var db = scope.ServiceProvider.GetRequiredService<DocumentDbContext>();
-//    db.Database.Migrate();
+        //await StartFillingDbWithDocuments(app, 50_000);
 
-//    var seeder = scope.ServiceProvider.GetRequiredService<DocumentSeeder>();
-//    await seeder.SeedAsync(totalDocuments: 17000);
-//}
+        app.Run();
+    }
 
-app.Run();
+    private static void ConfigureDataProviders(WebApplicationBuilder builder)
+    {
+        var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+
+        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+        dataSourceBuilder.EnableDynamicJson();
+        var dataSource = dataSourceBuilder.Build();
+
+        builder.Services.AddDbContext<DocumentDbContext>(options =>
+        {
+            options.UseNpgsql(dataSource);
+        });
+
+
+        builder.Services.AddTransient<IDocumentProvider, DocumentDalProvider>();
+        //builder.Services.AddTransient<IDocumentProvider, NpgsqlDocumentDalProvider>();
+        //builder.Services.AddTransient<IDocumentProvider>(sp => new MockDocumentDalProvider(documentCount: 10));
+    }
+
+    private static void ConfigureTestServices(WebApplicationBuilder builder)
+    {
+        builder.Services.AddTransient<IXmlWriter, AbankingCsvWriter>();
+        builder.Services.AddTransient<IXmlWriter, AbankingOpenXmlWriter>();
+        builder.Services.AddTransient<IXmlWriter, AbankingClosedXmlWriter>();
+        builder.Services.AddTransient<IXmlWriter, AbankingClosedXmlWriterBenchmark>();
+
+        // Выбираем нужный:
+        builder.Services.AddTransient<IXmlTest, XmlTest<AbankingOpenXmlWriter>>();
+        //builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriter>>();
+        //builder.Services.AddTransient<IXmlTest, XmlTest<AbankingCsvWriter>>(); // Полностю рабочий и корректный
+        //builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriterBenchmark>>(); // Из mvp ТА другого разработчика
+    }
+
+    private static void SetSettings(WebApplicationBuilder builder)
+    {
+        builder.Services.Configure<XmlTestSettings>(
+            builder.Configuration.GetSection(nameof(XmlTestSettings)));
+    }
+
+    #region Заполнение бд документами
+    /// <summary>
+    /// Начать заполнение бд тестовыми данными
+    /// </summary>
+    /// <param name="app"></param>
+    /// <returns></returns>
+    private static async Task StartFillingDbWithDocuments(WebApplication app, int documentsCount)
+    {
+        using (var scope = app.Services.CreateScope()) // Генерация в бд
+        {
+            var db = scope.ServiceProvider.GetRequiredService<DocumentDbContext>();
+            db.Database.Migrate();
+
+            var seeder = scope.ServiceProvider.GetRequiredService<DocumentSeeder>();
+            await seeder.SeedAsync(totalDocuments: documentsCount);
+        }
+    }
+    #endregion
+}

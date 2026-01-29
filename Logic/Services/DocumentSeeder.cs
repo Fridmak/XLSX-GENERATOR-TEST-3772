@@ -76,18 +76,17 @@ namespace Analitics6400.Logic.Seed
                   $"@p{paramIndex++}, @p{paramIndex++}, @p{paramIndex++}::jsonb, @p{paramIndex++})"
                 );
 
-                parameters.Add(Guid.NewGuid());                     // p0
-                parameters.Add(Guid.NewGuid());                     // p1  
-                parameters.Add(DateTime.UtcNow);                    // p2
-                parameters.Add(false);                              // p3
-                parameters.Add(2.0);                                // p4
-                parameters.Add(false);                              // p5
-                parameters.Add(jsonData.ToJsonString());            // p6 - просто строка!
-                parameters.Add(DateTime.UtcNow);                    // p7
+                parameters.Add(Guid.NewGuid());
+                parameters.Add(Guid.NewGuid());
+                parameters.Add(DateTime.UtcNow);
+                parameters.Add(false);
+                parameters.Add(2.0);
+                parameters.Add(false);
+                parameters.Add(jsonData.ToJsonString());
+                parameters.Add(DateTime.UtcNow);
             }
 
             var sql = sqlBuilder.ToString();
-            // ExecuteSqlRawAsync ожидает массив object[], а не NpgsqlParameter[]
             await _context.Database.ExecuteSqlRawAsync(sql, parameters.ToArray());
         }
 

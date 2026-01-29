@@ -10,7 +10,7 @@ namespace Analitics6400.Logic.Services.XmlWriters;
 public sealed class AbankingCsvWriter : IXmlWriter
 {
     private static readonly ConcurrentDictionary<(Type Type, string ColumnsKey), Func<object, object?>[]> _propertyAccessors = new();
-    private const int _flushInterval = 10000; 
+    private const int _flushInterval = 10000;
     private readonly ILogger<AbankingCsvWriter> _logger;
     public string Extension => ".csv";
 
@@ -38,27 +38,15 @@ public sealed class AbankingCsvWriter : IXmlWriter
             bufferSize: 1024 * 1024,
             leaveOpen: true);
 
-        // Header
-        await WriteRowAsync(
-            writer,
-            columns.Select(c => c.Header),
-            ct);
+        // Header - ВСЕГДА экранируем!
+        await WriteHeaderAsync(writer, columns, ct);
 
         var accessors = GetAccessors<T>(columns);
-
         var rowCount = 0;
 
         await foreach (var row in rows.WithCancellation(ct))
         {
-            var values = new string?[columns.Count];
-
-            for (int i = 0; i < columns.Count; i++)
-            {
-                var value = accessors[i](row!);
-                values[i] = FormatValue(value);
-            }
-
-            await WriteRowAsync(writer, values, ct);
+            await WriteDataRowAsync(writer, row, columns, accessors, ct);
 
             rowCount++;
             if (rowCount % _flushInterval == 0)
@@ -68,8 +56,7 @@ public sealed class AbankingCsvWriter : IXmlWriter
         }
 
         await writer.FlushAsync(ct);
-
-        _logger.LogInformation("Конец генерации при помощи AbankingCsvWriter");
+        _logger.LogInformation($"Сгенерировано строк: {rowCount}");
     }
 
     #region Helpers
@@ -92,71 +79,91 @@ public sealed class AbankingCsvWriter : IXmlWriter
         });
     }
 
-    private static async Task WriteRowAsync(
+    private static async Task WriteHeaderAsync(
         StreamWriter writer,
-        IEnumerable<string?> values,
+        IReadOnlyList<ExcelColumn> columns,
         CancellationToken ct)
     {
         var first = true;
-
-        foreach (var value in values)
+        foreach (var column in columns)
         {
             if (!first)
             {
                 await writer.WriteAsync(',');
             }
 
-            await writer.WriteAsync(EscapeCsv(value));
+            await writer.WriteAsync(EscapeCsv(column.Header ?? string.Empty));
             first = false;
         }
-
         await writer.WriteLineAsync();
         ct.ThrowIfCancellationRequested();
     }
 
-    private static string EscapeCsv(string? value)
+    private static async Task WriteDataRowAsync<T>(
+        StreamWriter writer,
+        T row,
+        IReadOnlyList<ExcelColumn> columns,
+        Func<object, object?>[] accessors,
+        CancellationToken ct)
+    {
+        var first = true;
+        for (int i = 0; i < columns.Count; i++)
+        {
+            if (!first)
+            {
+                await writer.WriteAsync(',');
+            }
+
+            var value = accessors[i](row!);
+            var formattedValue = FormatAndEscapeValue(value);
+            await writer.WriteAsync(formattedValue);
+            first = false;
+        }
+        await writer.WriteLineAsync();
+        ct.ThrowIfCancellationRequested();
+    }
+
+    private static string FormatAndEscapeValue(object? value)
+    {
+        if (value is null || value is DBNull)
+        {
+            return string.Empty;
+        }
+
+        string stringValue = value switch
+        {
+            string s => s,
+            Guid g => g.ToString(),
+            bool b => b ? "true" : "false",
+
+            DateTime dt => dt.ToString("yyyy-MM-ddTHH:mm:ss.fff", CultureInfo.InvariantCulture),
+            DateTimeOffset dto => dto.ToString("yyyy-MM-ddTHH:mm:ss.fffzzz", CultureInfo.InvariantCulture),
+
+            sbyte or byte or short or ushort or int or uint
+            or long or ulong or float or double or decimal
+                => Convert.ToString(value, CultureInfo.InvariantCulture)!,
+
+            _ => value.ToString() ?? string.Empty
+        };
+
+        return EscapeCsv(stringValue);
+    }
+
+    private static string EscapeCsv(string value)
     {
         if (string.IsNullOrEmpty(value))
         {
             return string.Empty;
         }
 
-        var mustQuote =
-            value.Contains(',') ||
-            value.Contains('"') ||
-            value.Contains('\n') ||
-            value.Contains('\r');
+        var mustQuote = value.AsSpan().IndexOfAny("\",\r\n") >= 0;
 
         if (!mustQuote)
         {
             return value;
         }
 
-        return "\"" + value.Replace("\"", "\"\"") + "\"";
-    }
-
-    private static string? FormatValue(object? value)
-    {
-        if (value is null)
-        {
-            return null;
-        }
-
-        return value switch
-        {
-            string s => s,
-            Guid g => g.ToString(),
-            bool b => b ? "true" : "false",
-
-            DateTime dt => dt.ToString("O", CultureInfo.InvariantCulture),
-            DateTimeOffset dto => dto.ToString("O", CultureInfo.InvariantCulture),
-
-            sbyte or byte or short or ushort or int or uint or long or ulong
-                or float or double or decimal
-                => Convert.ToString(value, CultureInfo.InvariantCulture),
-
-            _ => value.ToString()
-        };
+        return "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
     }
     #endregion
 }

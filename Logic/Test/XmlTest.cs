@@ -4,6 +4,7 @@ using Analitics6400.Logic.Services.XmlWriters.Interfaces;
 using Analitics6400.Logic.Services.XmlWriters.Models;
 using Analitics6400.Logic.Test.Interfaces;
 using DocumentFormat.OpenXml.Spreadsheet;
+using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Text.Json.Nodes;
 using System.Xml;
@@ -15,13 +16,15 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
     private readonly IXmlWriter _writer;
     private readonly IDocumentProvider _documentProvider;
     private readonly ILogger<XmlTest<T>> _logger;
+    private readonly XmlTestSettings _settings;
     public string Name => nameof(T); 
 
-    public XmlTest(IEnumerable<IXmlWriter> writer, IDocumentProvider documentProvider, ILogger<XmlTest<T>> logger)
+    public XmlTest(IEnumerable<IXmlWriter> writer, IDocumentProvider documentProvider, ILogger<XmlTest<T>> logger, IOptions<XmlTestSettings> options)
     {
         _writer = writer.Where(x => x is T).First();
         _documentProvider = documentProvider;
         _logger = logger;
+        _settings = options.Value;
     }
 
     #region Разогрев
@@ -70,16 +73,6 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
             new("IsCanForValidate", typeof(bool)),
             new("ChangedDateUtc", typeof(DateTime?))
         };
-        //var columns = new List<ExcelColumn>
-        //{
-        //    new("Id", typeof(Guid)),
-        //    new("DocumentSchemaId", typeof(Guid?)),
-        //    new("Published", typeof(DateTime?)),
-        //    new("IsArchived", typeof(bool)),
-        //    new("Version", typeof(double)),
-        //    new("IsCanForValidate", typeof(bool)),
-        //    new("ChangedDateUtc", typeof(DateTime?))
-        //};
 
         _logger.LogInformation("Начало генерации CSV");
         var stopwatch = Stopwatch.StartNew();
@@ -87,7 +80,7 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
         int rowCount = 0;
         try
         {
-            var rows = _documentProvider.GetDocumentsAsync(limit: null, ct);
+            var rows = _documentProvider.GetDocumentsAsync(_settings.DocumentsLimit, ct);
 
             var fileName = $"DocumentsReport_{DateTime.UtcNow:yyyyMMdd_HHmmss}.{_writer.Extension}";
             await using var fs = new FileStream(fileName, FileMode.Create, FileAccess.ReadWrite, FileShare.None, bufferSize: 1024 * 1024);
