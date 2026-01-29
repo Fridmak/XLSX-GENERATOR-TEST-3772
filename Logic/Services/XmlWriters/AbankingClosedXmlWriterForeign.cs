@@ -8,14 +8,14 @@ using System.Text.Json;
 
 namespace Analitics6400.Logic.Services.XmlWriters;
 
-public sealed class AbankingClosedXmlWriterBenchmark : IXmlWriter
+public sealed class AbankingClosedXmlWriterForeign : IXmlWriter
 {
     private static readonly ConcurrentDictionary<(Type Type, string ColumnsKey), Func<object, object?>[]> _propertyAccessors = new();
-    private readonly ILogger<AbankingClosedXmlWriterBenchmark> _logger;
+    private readonly ILogger<AbankingClosedXmlWriterForeign> _logger;
 
     public string Extension => ".xlsx";
 
-    public AbankingClosedXmlWriterBenchmark(ILogger<AbankingClosedXmlWriterBenchmark> logger)
+    public AbankingClosedXmlWriterForeign(ILogger<AbankingClosedXmlWriterForeign> logger)
     {
         _logger = logger;
     }

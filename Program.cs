@@ -48,9 +48,9 @@ public class Programm
         });
 
 
-        builder.Services.AddTransient<IDocumentProvider, DocumentDalProvider>();
-        //builder.Services.AddTransient<IDocumentProvider, NpgsqlDocumentDalProvider>();
-        //builder.Services.AddTransient<IDocumentProvider>(sp => new MockDocumentDalProvider(documentCount: 10));
+        //builder.Services.AddTransient<IDocumentProvider, DocumentDalProvider>();
+        builder.Services.AddTransient<IDocumentProvider, NpgsqlDocumentDalProvider>();
+        //builder.Services.AddTransient<IDocumentProvider>(sp => new MockDocumentDalProvider(documentCount: 100_000));
     }
 
     private static void ConfigureTestServices(WebApplicationBuilder builder)
@@ -58,13 +58,13 @@ public class Programm
         builder.Services.AddTransient<IXmlWriter, AbankingCsvWriter>();
         builder.Services.AddTransient<IXmlWriter, AbankingOpenXmlWriter>();
         builder.Services.AddTransient<IXmlWriter, AbankingClosedXmlWriter>();
-        builder.Services.AddTransient<IXmlWriter, AbankingClosedXmlWriterBenchmark>();
+        builder.Services.AddTransient<IXmlWriter, AbankingClosedXmlWriterForeign>();
 
         // Выбираем нужный:
-        builder.Services.AddTransient<IXmlTest, XmlTest<AbankingOpenXmlWriter>>();
-        //builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriter>>();
+        //builder.Services.AddTransient<IXmlTest, XmlTest<AbankingOpenXmlWriter>>();
+        builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriter>>();
         //builder.Services.AddTransient<IXmlTest, XmlTest<AbankingCsvWriter>>(); // Полностю рабочий и корректный
-        //builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriterBenchmark>>(); // Из mvp ТА другого разработчика
+        //builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriterForeign>>(); // Из mvp ТА другого разработчика
     }
 
     private static void SetSettings(WebApplicationBuilder builder)

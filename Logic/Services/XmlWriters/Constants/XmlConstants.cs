@@ -8,7 +8,7 @@ public static class XmlConstants
 
     public const string JsonOverflowNotice = " ... Используйте генерацию CSV чтобы увидеть полностью";
 
-    public const int ExcelMaxRows = 1_000_000;
+    public const int ExcelMaxRows = 1_048_576 - 1;
 
-    public const int MaxCellTextLength = 16_000;
+    public const int MaxCellTextLength = 32_767 - 1;
 }

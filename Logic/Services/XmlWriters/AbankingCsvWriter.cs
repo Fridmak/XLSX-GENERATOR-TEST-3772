@@ -38,7 +38,6 @@ public sealed class AbankingCsvWriter : IXmlWriter
             bufferSize: 1024 * 1024,
             leaveOpen: true);
 
-        // Header - ВСЕГДА экранируем!
         await WriteHeaderAsync(writer, columns, ct);
 
         var accessors = GetAccessors<T>(columns);

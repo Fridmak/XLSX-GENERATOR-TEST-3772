@@ -20,71 +20,66 @@ public sealed class AbankingClosedXmlWriter : IXmlWriter
     }
 
     public async Task GenerateAsync<T>(
-    IAsyncEnumerable<T> rows,
-    IReadOnlyList<ExcelColumn> columns,
-    Stream output,
-    CancellationToken ct = default)
+        IAsyncEnumerable<T> rows,
+        IReadOnlyList<ExcelColumn> columns,
+        Stream output,
+        CancellationToken ct = default)
     {
         if (columns.Count == 0)
             throw new ArgumentException("Columns cannot be empty", nameof(columns));
 
         using var workbook = new XLWorkbook();
-
         int sheetId = 1;
         var ws = workbook.AddWorksheet(GetSheetName(sheetId));
         WriteHeader(ws, columns);
 
         var accessors = GetAccessors<T>(columns);
-        int rowIndex = 2; // строка после заголовка
+        int rowIndex = 2;
 
         await foreach (var row in rows.WithCancellation(ct))
         {
-            // Если достигнут максимум строк листа
+            int maxRowInObject = rowIndex;
+
+            for (int c = 0; c < columns.Count; c++)
+            {
+                var value = accessors[c](row!);
+                var text = value?.ToString() ?? string.Empty;
+
+                WriteValueInChunks(ws, c + 1, text, ref maxRowInObject, ref sheetId, workbook, columns);
+            }
+
+            rowIndex = maxRowInObject;
+
+            if (rowIndex % 1000 == 0)
+                await Task.Yield();
+        }
+
+        workbook.SaveAs(output);
+    }
+
+    private static void WriteValueInChunks(IXLWorksheet ws, int column, string text, ref int rowIndex, ref int sheetId, XLWorkbook workbook, IReadOnlyList<ExcelColumn> columns)
+    {
+        int maxLen = XmlConstants.MaxCellTextLength;
+        int start = 0;
+
+        while (start < text.Length)
+        {
+            int length = Math.Max(0, Math.Min(maxLen, text.Length - start));
+            string chunk = text.Substring(start, length);
+
             if (rowIndex > XmlConstants.ExcelMaxRows)
             {
-                // Вставляем уведомление о переполнении в последнюю строку предыдущего листа
-                for (int c = 0; c < columns.Count; c++)
-                {
-                    ws.Cell(XmlConstants.ExcelMaxRows, c + 1)
-                        .SetValue(XmlConstants.JsonOverflowNotice);
-                }
-
-                // Создаем новый лист
                 sheetId++;
                 ws = workbook.AddWorksheet(GetSheetName(sheetId));
                 WriteHeader(ws, columns);
                 rowIndex = 2;
             }
 
-            for (int c = 0; c < columns.Count; c++)
-            {
-                var value = accessors[c](row!);
-
-
-                if (value is string s && s.Length > XmlConstants.MaxCellTextLength)
-                {
-                    int allowedLength = XmlConstants.MaxCellTextLength - XmlConstants.JsonOverflowNotice.Length;
-                    if (allowedLength < 0) allowedLength = XmlConstants.MaxCellTextLength;
-
-                    s = s.Substring(0, allowedLength) + XmlConstants.JsonOverflowNotice;
-                    ws.Cell(rowIndex, c + 1).SetValue(s);
-                }
-                else
-                {
-                    SetCellValue(ws.Cell(rowIndex, c + 1), value);
-                }
-            }
-
+            ws.Cell(rowIndex, column).SetValue(chunk);
             rowIndex++;
-
-            if (rowIndex % 1000 == 0)
-                await Task.Yield();
+            start += length;
         }
-
-        // Если последний лист не полный, ничего не делаем, т.к. переполнения нет
-        workbook.SaveAs(output);
     }
-
 
     private static string GetSheetName(int sheetId) => $"Sheet{sheetId}";
 
@@ -112,42 +107,5 @@ public sealed class AbankingClosedXmlWriter : IXmlWriter
                         : (_ => null))
                 .ToArray();
         });
-    }
-
-    private static void SetCellValue(IXLCell cell, object? value)
-    {
-        if (value is null)
-        {
-            cell.SetValue(string.Empty);
-            return;
-        }
-
-        switch (value)
-        {
-            case string s:
-                cell.SetValue(s);
-                break;
-            case Guid g:
-                cell.SetValue(g.ToString());
-                break;
-            case bool b:
-                cell.SetValue(b);
-                break;
-            case DateTime dt:
-                cell.SetValue(dt);
-                break;
-            case DateTimeOffset dto:
-                cell.SetValue(dto.DateTime);
-                break;
-            case sbyte or byte or short or ushort or int or uint or long or ulong:
-                cell.SetValue(Convert.ToInt64(value));
-                break;
-            case float or double or decimal:
-                cell.SetValue(Convert.ToDouble(value));
-                break;
-            default:
-                cell.SetValue(value.ToString());
-                break;
-        }
     }
 }

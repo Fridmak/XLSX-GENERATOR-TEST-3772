@@ -3,6 +3,6 @@
 
 public class XmlTestSettings
 {
-    public int DocumentsLimit { get; set; }
+    public int? DocumentsLimit { get; set; }
 }
 

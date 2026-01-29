@@ -20,8 +20,15 @@ public class TestsBgRunner : BackgroundService
 
         foreach (var testRunner in testRunners)
         {
-            await testRunner.RunAsync(ct: stoppingToken);
-            _logger.LogInformation($"Test {testRunner.Name} completed.");
+            try
+            {
+                await testRunner.RunAsync(ct: stoppingToken);
+                _logger.LogInformation($"Test {testRunner.Name} completed.");
+            }
+            catch (Exception ex) 
+            {
+                _logger.LogError(ex.Message);
+            }
         }
     }
 }
