@@ -5,6 +5,7 @@ using System.Data;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json.Nodes;
 
 namespace Analitics6400.Dal.Services;
 
@@ -59,7 +60,7 @@ public sealed class NpgsqlDocumentDalProvider : IDocumentProvider
                 Published = reader.GetDateTime(2),
                 IsArchived = reader.GetBoolean(3),
                 Version = reader.GetDouble(4),
-                JsonData = reader.GetString(5),
+                JsonData = JsonNode.Parse(reader.GetString(5)) as JsonObject,
                 IsCanForValidate = reader.GetBoolean(6),
                 ChangedDateUtc = reader.GetDateTime(7)
             };

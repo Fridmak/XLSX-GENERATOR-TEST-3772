@@ -35,7 +35,7 @@ public sealed class AbankingCsvWriter : IXmlWriter
         using var writer = new StreamWriter(
             output,
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-            bufferSize: 1024 * 64,
+            bufferSize: 1024 * 1024,
             leaveOpen: true);
 
         // Header

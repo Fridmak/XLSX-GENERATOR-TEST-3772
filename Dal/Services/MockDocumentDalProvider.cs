@@ -1,8 +1,8 @@
-﻿using Analitics6400.Dal.Services.Interfaces;
-using Analitics6400.Logic.Models;
-using System.Buffers;
+﻿using System.Buffers;
 using System.Runtime.CompilerServices;
-using System.Text;
+using System.Text.Json.Nodes;
+using Analitics6400.Dal.Services.Interfaces;
+using Analitics6400.Logic.Models;
 
 namespace Analitics6400.Dal.Services;
 
@@ -15,8 +15,8 @@ public sealed class MockDocumentDalProvider : IDocumentProvider
 {
     private readonly int _documentCount;
     private readonly Random _random = new();
-    private readonly byte[] _jsonTemplateBytes;
-    private readonly byte[] _largeJsonBuffer;
+    private readonly JsonObject _jsonTemplate;
+    private readonly string _largeJsonString;
 
     private const int MinSize = 10_000;       // 10 КБ
     private const int MaxSize = 1_000_000;    // 1 МБ
@@ -25,11 +25,25 @@ public sealed class MockDocumentDalProvider : IDocumentProvider
     public MockDocumentDalProvider(int documentCount = 1000)
     {
         _documentCount = documentCount;
-        _jsonTemplateBytes = Encoding.UTF8.GetBytes("{\"key\":\"value\"}");
 
-        // Создаем один раз большой буфер максимального размера
-        _largeJsonBuffer = ArrayPool<byte>.Shared.Rent(MaxSize);
-        FillLargeBuffer();
+        // Создаем шаблон JsonObject
+        _jsonTemplate = new JsonObject
+        {
+            ["id"] = Guid.NewGuid().ToString(),
+            ["timestamp"] = DateTime.UtcNow.ToString("O"),
+            ["data"] = new JsonObject
+            {
+                ["value1"] = "test",
+                ["value2"] = 123,
+                ["nested"] = new JsonObject
+                {
+                    ["field"] = "nestedValue"
+                }
+            }
+        };
+
+        // Создаем большую строку для копирования
+        _largeJsonString = CreateLargeJsonString();
     }
 
     public async IAsyncEnumerable<DocumentDtoModel> GetDocumentsAsync(
@@ -45,8 +59,8 @@ public sealed class MockDocumentDalProvider : IDocumentProvider
             // экспоненциальное распределение
             int jsonSize = GetExponentialSize();
 
-            // Используем предзаполненный буфер
-            string json = GetJsonString(jsonSize);
+            // Создаем JsonObject нужного размера
+            JsonObject jsonObject = CreateJsonObject(jsonSize);
 
             yield return new DocumentDtoModel
             {
@@ -55,7 +69,7 @@ public sealed class MockDocumentDalProvider : IDocumentProvider
                 Published = DateTime.UtcNow,
                 IsArchived = false,
                 Version = 1.0,
-                JsonData = json,
+                JsonData = jsonObject,
                 IsCanForValidate = true,
                 ChangedDateUtc = DateTime.UtcNow
             };
@@ -68,20 +82,85 @@ public sealed class MockDocumentDalProvider : IDocumentProvider
         }
     }
 
-    private void FillLargeBuffer()
+    private JsonObject CreateJsonObject(int targetSize)
     {
-        int position = 0;
-        while (position < MaxSize - _jsonTemplateBytes.Length)
+        var result = new JsonObject();
+
+        // Добавляем базовые поля
+        result["documentId"] = Guid.NewGuid().ToString();
+        result["createdAt"] = DateTime.UtcNow.ToString("O");
+        result["index"] = _random.Next(1, 10000);
+
+        // Создаем массив данных для увеличения размера
+        var dataArray = new JsonArray();
+        result["items"] = dataArray;
+
+        // Рассчитываем сколько элементов нужно добавить
+        // Средний размер одного элемента ~200 байт
+        int itemsNeeded = (targetSize - 500) / 200;
+        if (itemsNeeded < 1) itemsNeeded = 1;
+
+        for (int i = 0; i < itemsNeeded; i++)
         {
-            Buffer.BlockCopy(_jsonTemplateBytes, 0, _largeJsonBuffer, position, _jsonTemplateBytes.Length);
-            position += _jsonTemplateBytes.Length;
+            var item = new JsonObject
+            {
+                ["id"] = Guid.NewGuid().ToString(),
+                ["name"] = $"Item_{i}",
+                ["value"] = _random.NextDouble() * 1000,
+                ["timestamp"] = DateTime.UtcNow.AddSeconds(-_random.Next(0, 86400)).ToString("O"),
+                ["metadata"] = new JsonObject
+                {
+                    ["category"] = $"Category{_random.Next(1, 10)}",
+                    ["tags"] = new JsonArray
+                    {
+                        $"tag{_random.Next(1, 10)}",
+                        $"tag{_random.Next(11, 20)}",
+                        $"tag{_random.Next(21, 30)}"
+                    }
+                }
+            };
+
+            dataArray.Add(item);
+
+            // Проверяем текущий размер
+            if (GetJsonSize(result) >= targetSize)
+                break;
         }
+
+        return result;
     }
 
-    private string GetJsonString(int size)
+    private int GetJsonSize(JsonObject jsonObject)
     {
-        // Просто берем нужное количество байт из предзаполненного буфера
-        return Encoding.UTF8.GetString(_largeJsonBuffer, 0, size);
+        // Простой способ оценить размер - сериализовать в строку
+        return jsonObject.ToJsonString().Length;
+    }
+
+    private string CreateLargeJsonString()
+    {
+        // Создаем очень большой JsonObject и сериализуем его
+        var largeObject = new JsonObject();
+        var largeArray = new JsonArray();
+
+        for (int i = 0; i < 1000; i++)
+        {
+            var item = new JsonObject
+            {
+                ["index"] = i,
+                ["data"] = new string('x', 1000), // строка из 1000 символов
+                ["values"] = new JsonArray
+                {
+                    _random.Next(),
+                    _random.NextDouble(),
+                    _random.NextDouble(),
+                    _random.NextDouble()
+                }
+            };
+            largeArray.Add(item);
+        }
+
+        largeObject["data"] = largeArray;
+        return largeObject.ToJsonString();
     }
 
     private int GetExponentialSize()
@@ -97,9 +176,9 @@ public sealed class MockDocumentDalProvider : IDocumentProvider
         return (int)size;
     }
 
-    // Освобождаем ресурсы при необходимости
+    // Если нужен более контролируемый подход с ресайклингом буфера
     public void Dispose()
     {
-        ArrayPool<byte>.Shared.Return(_largeJsonBuffer);
+        // Ничего не делаем, так как нет неуправляемых ресурсов
     }
 }

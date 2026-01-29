@@ -1,4 +1,7 @@
 using Analitics6400.Dal;
+using Microsoft.EntityFrameworkCore;
+using System.Text;
+using System.Text.Json.Nodes;
 
 namespace Analitics6400.Logic.Seed
 {
@@ -6,6 +9,7 @@ namespace Analitics6400.Logic.Seed
     {
         private readonly DocumentDbContext _context;
         private readonly ILogger<DocumentSeeder> _logger;
+        private readonly Random _random = new();
 
         public DocumentSeeder(DocumentDbContext context, ILogger<DocumentSeeder> logger)
         {
@@ -13,52 +17,122 @@ namespace Analitics6400.Logic.Seed
             _logger = logger;
         }
 
-        public async Task SeedAsync(int totalDocuments = 100_000, int batchSize = 2000)
+        public async Task SeedAsync(int totalDocuments = 100_000, int batchSize = 1000)
         {
-            var random = new Random();
+            _logger.LogInformation($"Starting seeding of {totalDocuments} documents...");
+
             _context.ChangeTracker.AutoDetectChangesEnabled = false;
+            _context.ChangeTracker.QueryTrackingBehavior = QueryTrackingBehavior.NoTracking;
 
-            for (int batch = 0; batch < totalDocuments / batchSize; batch++)
+            var batches = totalDocuments / batchSize;
+            var jsonTemplate = GenerateJsonTemplate();
+
+            for (int batch = 0; batch < batches; batch++)
             {
-                using var transaction = await _context.Database.BeginTransactionAsync();
+                await using var transaction = await _context.Database.BeginTransactionAsync();
 
-                var documents = new Document[batchSize];
-                for (int i = 0; i < batchSize; i++)
+                try
                 {
-                    int jsonSizeKb = random.Next(100, 1024);
-                    string jsonPayload = GenerateJsonPayload(jsonSizeKb * 1024);
+                    await InsertBatchAsync(batchSize, batch, jsonTemplate);
+                    await transaction.CommitAsync();
 
-                    documents[i] = new Document
+                    _logger.LogInformation($"Batch {batch + 1}/{batches} inserted ({batchSize * (batch + 1)} total)");
+
+                    if ((batch + 1) % 10 == 0)
                     {
-                        Id = Guid.NewGuid(),
-                        DocumentSchemaId = Guid.NewGuid(),
-                        Published = DateTime.UtcNow,
-                        IsArchived = false,
-                        Version = 2.0,
-                        IsCanForValidate = false,
-                        JsonData = jsonPayload,
-                        ChangedDateUtc = DateTime.UtcNow
-                    };
+                        GC.Collect();
+                    }
                 }
-
-                _context.Documents.AddRange(documents);
-                await _context.SaveChangesAsync();
-                await transaction.CommitAsync();
-
-                _logger.LogInformation($"Batch {batch + 1}/{totalDocuments / batchSize} inserted");
+                catch (Exception ex)
+                {
+                    await transaction.RollbackAsync();
+                    _logger.LogError(ex, $"Error in batch {batch + 1}");
+                    throw;
+                }
             }
+
+            _context.ChangeTracker.AutoDetectChangesEnabled = true;
+            _logger.LogInformation("Seeding completed!");
         }
 
-        private string GenerateJsonPayload(int targetSizeBytes)
+        private async Task InsertBatchAsync(int batchSize, int batchNumber, JsonObject jsonTemplate)
         {
-            var obj = new
+            var sqlBuilder = new StringBuilder();
+            sqlBuilder.AppendLine("INSERT INTO \"documents\" (\"Id\", \"DocumentSchemaId\", \"Published\", \"IsArchived\", \"Version\", \"IsCanForValidate\", \"JsonData\", \"ChangedDateUtc\") VALUES ");
+
+            var parameters = new List<object>();
+            var paramIndex = 0;
+
+            for (int i = 0; i < batchSize; i++)
             {
-                access_token = (string?)null,
-                currentLanguage = "ru",
-                data = new string('x', Math.Max(0, targetSizeBytes - 50))
+                if (i > 0)
+                    sqlBuilder.Append(", ");
+
+                var jsonSizeKb = _random.Next(100, 1024);
+                var jsonData = GenerateJsonPayloadOptimized(jsonTemplate, jsonSizeKb * 1024, paramIndex);
+
+                sqlBuilder.Append(
+                  $"(@p{paramIndex++}, @p{paramIndex++}, @p{paramIndex++}, @p{paramIndex++}, " +
+                  $"@p{paramIndex++}, @p{paramIndex++}, @p{paramIndex++}::jsonb, @p{paramIndex++})"
+                );
+
+                parameters.Add(Guid.NewGuid());                     // p0
+                parameters.Add(Guid.NewGuid());                     // p1  
+                parameters.Add(DateTime.UtcNow);                    // p2
+                parameters.Add(false);                              // p3
+                parameters.Add(2.0);                                // p4
+                parameters.Add(false);                              // p5
+                parameters.Add(jsonData.ToJsonString());            // p6 - просто строка!
+                parameters.Add(DateTime.UtcNow);                    // p7
+            }
+
+            var sql = sqlBuilder.ToString();
+            // ExecuteSqlRawAsync ожидает массив object[], а не NpgsqlParameter[]
+            await _context.Database.ExecuteSqlRawAsync(sql, parameters.ToArray());
+        }
+
+        private JsonObject GenerateJsonTemplate()
+        {
+            return new JsonObject
+            {
+                ["access_token"] = null,
+                ["currentLanguage"] = "ru",
+                ["data"] = string.Empty
+            };
+        }
+
+        private JsonObject GenerateJsonPayloadOptimized(JsonObject template, int targetSizeBytes, int seed)
+        {
+            var random = new Random(seed + Environment.TickCount);
+            var baseSize = template.ToJsonString().Length;
+            var neededChars = targetSizeBytes - baseSize - 50;
+
+            if (neededChars <= 0)
+                return template;
+
+            var dataString = GenerateLargeStringOptimized(neededChars);
+
+            var jsonObj = new JsonObject
+            {
+                ["access_token"] = null,
+                ["currentLanguage"] = "ru",
+                ["data"] = dataString
             };
 
-            return System.Text.Json.JsonSerializer.Serialize(obj);
+            return jsonObj;
+        }
+
+        private string GenerateLargeStringOptimized(int length)
+        {
+            var sb = new StringBuilder(length);
+            const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-.,:;";
+
+            for (int i = 0; i < length; i++)
+            {
+                sb.Append(chars[_random.Next(chars.Length)]);
+            }
+
+            return sb.ToString();
         }
     }
 }

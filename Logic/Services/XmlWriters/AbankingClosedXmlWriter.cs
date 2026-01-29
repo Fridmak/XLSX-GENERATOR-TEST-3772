@@ -20,91 +20,80 @@ public sealed class AbankingClosedXmlWriter : IXmlWriter
     }
 
     public async Task GenerateAsync<T>(
-        IAsyncEnumerable<T> rows,
-        IReadOnlyList<ExcelColumn> columns,
-        Stream output,
-        CancellationToken ct = default)
+    IAsyncEnumerable<T> rows,
+    IReadOnlyList<ExcelColumn> columns,
+    Stream output,
+    CancellationToken ct = default)
     {
         if (columns.Count == 0)
             throw new ArgumentException("Columns cannot be empty", nameof(columns));
 
         using var workbook = new XLWorkbook();
-        var ws = workbook.AddWorksheet("Sheet1");
 
-        // Header
-        for (int c = 0; c < columns.Count; c++)
-        {
-            ws.Cell(1, c + 1).SetValue(columns[c].Header);
-        }
+        int sheetId = 1;
+        var ws = workbook.AddWorksheet(GetSheetName(sheetId));
+        WriteHeader(ws, columns);
 
         var accessors = GetAccessors<T>(columns);
-        int rowIndex = 2;
+        int rowIndex = 2; // строка после заголовка
 
         await foreach (var row in rows.WithCancellation(ct))
         {
-            var values = new object?[columns.Count];
-            int rowSpan = 1;
+            // Если достигнут максимум строк листа
+            if (rowIndex > XmlConstants.ExcelMaxRows)
+            {
+                // Вставляем уведомление о переполнении в последнюю строку предыдущего листа
+                for (int c = 0; c < columns.Count; c++)
+                {
+                    ws.Cell(XmlConstants.ExcelMaxRows, c + 1)
+                        .SetValue(XmlConstants.JsonOverflowNotice);
+                }
+
+                // Создаем новый лист
+                sheetId++;
+                ws = workbook.AddWorksheet(GetSheetName(sheetId));
+                WriteHeader(ws, columns);
+                rowIndex = 2;
+            }
 
             for (int c = 0; c < columns.Count; c++)
             {
                 var value = accessors[c](row!);
-                values[c] = value;
+
 
                 if (value is string s && s.Length > XmlConstants.MaxCellTextLength)
                 {
-                    var chunkCount =
-                        (s.Length + XmlConstants.MaxCellTextLength - 1)
-                        / XmlConstants.MaxCellTextLength;
+                    int allowedLength = XmlConstants.MaxCellTextLength - XmlConstants.JsonOverflowNotice.Length;
+                    if (allowedLength < 0) allowedLength = XmlConstants.MaxCellTextLength;
 
-                    if (chunkCount > rowSpan)
-                        rowSpan = chunkCount;
+                    s = s.Substring(0, allowedLength) + XmlConstants.JsonOverflowNotice;
+                    ws.Cell(rowIndex, c + 1).SetValue(s);
                 }
-            }
-
-            for (int chunkRow = 0; chunkRow < rowSpan; chunkRow++)
-            {
-                for (int c = 0; c < columns.Count; c++)
+                else
                 {
-                    var value = values[c];
-                    if (value is null)
-                        continue;
-
-                    var cell = ws.Cell(rowIndex, c + 1);
-
-                    if (value is string s)
-                    {
-                        if (s.Length <= XmlConstants.MaxCellTextLength)
-                        {
-                            if (chunkRow == 0)
-                                cell.SetValue(s);
-
-                            continue;
-                        }
-
-                        int start = chunkRow * XmlConstants.MaxCellTextLength;
-                        if (start >= s.Length)
-                            continue;
-
-                        int len = Math.Min(
-                            XmlConstants.MaxCellTextLength,
-                            s.Length - start);
-
-                        cell.SetValue(s.Substring(start, len));
-                        continue;
-                    }
-
-                    if (chunkRow == 0)
-                    {
-                        SetCellValue(cell, value);
-                    }
+                    SetCellValue(ws.Cell(rowIndex, c + 1), value);
                 }
-
-                rowIndex++;
             }
+
+            rowIndex++;
+
+            if (rowIndex % 1000 == 0)
+                await Task.Yield();
         }
 
-        await Task.Yield(); // логическая async-точка
+        // Если последний лист не полный, ничего не делаем, т.к. переполнения нет
         workbook.SaveAs(output);
+    }
+
+
+    private static string GetSheetName(int sheetId) => $"Sheet{sheetId}";
+
+    private static void WriteHeader(IXLWorksheet ws, IReadOnlyList<ExcelColumn> columns)
+    {
+        for (int c = 0; c < columns.Count; c++)
+        {
+            ws.Cell(1, c + 1).SetValue(columns[c].Header);
+        }
     }
 
     private static Func<object, object?>[] GetAccessors<T>(IReadOnlyList<ExcelColumn> columns)
@@ -125,8 +114,14 @@ public sealed class AbankingClosedXmlWriter : IXmlWriter
         });
     }
 
-    private static void SetCellValue(IXLCell cell, object value)
+    private static void SetCellValue(IXLCell cell, object? value)
     {
+        if (value is null)
+        {
+            cell.SetValue(string.Empty);
+            return;
+        }
+
         switch (value)
         {
             case string s:

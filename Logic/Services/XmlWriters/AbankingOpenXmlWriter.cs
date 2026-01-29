@@ -1,5 +1,5 @@
-using Analitics6400.Logic.Services.XmlWriters.Interfaces;
 using Analitics6400.Logic.Services.XmlWriters.Constants;
+using Analitics6400.Logic.Services.XmlWriters.Interfaces;
 using Analitics6400.Logic.Services.XmlWriters.Models;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -22,8 +22,6 @@ namespace Analitics6400.Logic.Services.XmlWriters
             _logger = logger;
         }
 
-        private sealed record CellPlan(object? Value, string? Text, bool IsLongText, int ChunkCount);
-
         public async Task GenerateAsync<T>(
             IAsyncEnumerable<T> rows,
             IReadOnlyList<ExcelColumn> columns,
@@ -31,110 +29,97 @@ namespace Analitics6400.Logic.Services.XmlWriters
             CancellationToken ct = default)
         {
             if (columns.Count == 0)
-                throw new ArgumentException("Columns cannot be empty", nameof(columns));
-
-            using (var document = SpreadsheetDocument.Create(
-                       output,
-                       SpreadsheetDocumentType.Workbook,
-                       autoSave: false))
             {
-                var workbookPart = document.AddWorkbookPart();
-                workbookPart.Workbook = new Workbook();
+                throw new ArgumentException("Columns cannot be empty", nameof(columns));
+            }
 
-                var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+            // Создаем документ
+            using var document = SpreadsheetDocument.Create(
+                output,
+                SpreadsheetDocumentType.Workbook,
+                autoSave: false);
 
-                using var writer = OpenXmlWriter.Create(worksheetPart);
+            var workbookPart = document.AddWorkbookPart();
+            workbookPart.Workbook = new Workbook();
+            var sheets = workbookPart.Workbook.AppendChild(new Sheets());
 
+            uint sheetId = 1;
+            uint rowIndex = 2; // первая строка - заголовок
+
+            // создаем первый лист
+            var worksheetPart = CreateWorksheetPart(workbookPart, sheets, sheetId);
+            var writer = OpenXmlWriter.Create(worksheetPart);
+
+            try
+            {
                 writer.WriteStartElement(new Worksheet());
                 writer.WriteStartElement(new SheetData());
 
+                // пишем заголовок
                 WriteHeader(writer, columns);
 
                 var accessors = GetAccessors<T>(columns);
 
-                uint mainRowIndex = 2;
-
                 await foreach (var row in rows.WithCancellation(ct))
                 {
-                    var plans = new CellPlan[columns.Count];
-                    int rowSpan = 1;
+                    // если превышен лимит строк, создаем новый лист
+                    if (rowIndex > XmlConstants.ExcelMaxRows)
+                    {
+                        // закрываем текущий лист
+                        writer.WriteEndElement(); // SheetData
+                        writer.WriteEndElement(); // Worksheet
+                        writer.Close();
+                        writer.Dispose();
 
+                        sheetId++;
+                        rowIndex = 2; // снова после заголовка
+
+                        // создаем новый лист
+                        worksheetPart = CreateWorksheetPart(workbookPart, sheets, sheetId);
+                        writer = OpenXmlWriter.Create(worksheetPart);
+                        writer.WriteStartElement(new Worksheet());
+                        writer.WriteStartElement(new SheetData());
+                        WriteHeader(writer, columns); // новый заголовок
+                    }
+
+                    // пишем строку
+                    writer.WriteStartElement(new Row { RowIndex = rowIndex });
                     for (int i = 0; i < columns.Count; i++)
                     {
-                        var value = accessors[i](row!);
-
-                        if (value is string s && s.Length > XmlConstants.MaxCellTextLength)
-                        {
-                            var chunkCount = (s.Length + XmlConstants.MaxCellTextLength - 1) / XmlConstants.MaxCellTextLength;
-                            plans[i] = new CellPlan(value, s, IsLongText: true, ChunkCount: chunkCount);
-                            if (chunkCount > rowSpan)
-                                rowSpan = chunkCount;
-                        }
-                        else
-                        {
-                            plans[i] = new CellPlan(value, value as string, IsLongText: false, ChunkCount: 1);
-                        }
+                        WriteCell(writer, accessors[i](row!));
                     }
-
-                    for (int chunkRow = 0; chunkRow < rowSpan; chunkRow++)
-                    {
-                        writer.WriteStartElement(new Row { RowIndex = mainRowIndex });
-
-                        for (int i = 0; i < columns.Count; i++)
-                        {
-                            var plan = plans[i];
-
-                            if (!plan.IsLongText)
-                            {
-                                if (chunkRow == 0)
-                                    WriteCell(writer, plan.Value);
-                                else
-                                    writer.WriteElement(new Cell());
-
-                                continue;
-                            }
-
-                            if (plan.Text is null)
-                            {
-                                writer.WriteElement(new Cell());
-                                continue;
-                            }
-
-                            int start = chunkRow * XmlConstants.MaxCellTextLength;
-                            if (start >= plan.Text.Length)
-                            {
-                                writer.WriteElement(new Cell());
-                                continue;
-                            }
-
-                            int len = Math.Min(XmlConstants.MaxCellTextLength, plan.Text.Length - start);
-                            WriteString(writer, plan.Text.Substring(start, len));
-                        }
-
-                        writer.WriteEndElement();
-                        mainRowIndex++;
-                    }
+                    writer.WriteEndElement(); // Row
+                    rowIndex++;
                 }
-
+            }
+            finally
+            {
+                // закрываем последний лист
                 writer.WriteEndElement(); // SheetData
                 writer.WriteEndElement(); // Worksheet
-
-                workbookPart.Workbook.AppendChild(new Sheets(
-                    new Sheet
-                    {
-                        Id = workbookPart.GetIdOfPart(worksheetPart),
-                        SheetId = 1,
-                        Name = "Sheet1"
-                    }));
-
-                workbookPart.Workbook.Save();
+                writer.Close();
+                writer.Dispose();
             }
+
+            workbookPart.Workbook.Save();
+        }
+
+
+        private static WorksheetPart CreateWorksheetPart(WorkbookPart workbookPart, Sheets sheets, uint sheetId)
+        {
+            var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+            sheets.Append(new Sheet
+            {
+                Id = workbookPart.GetIdOfPart(worksheetPart),
+                SheetId = sheetId,
+                Name = $"Sheet{sheetId}"
+            });
+            return worksheetPart;
         }
 
         private static void WriteHeader(OpenXmlWriter writer, IReadOnlyList<ExcelColumn> columns)
         {
-            writer.WriteStartElement(new Row());
-
+            writer.WriteStartElement(new Row { RowIndex = 1 });
             foreach (var col in columns)
             {
                 writer.WriteElement(new Cell
@@ -143,8 +128,7 @@ namespace Analitics6400.Logic.Services.XmlWriters
                     CellValue = new CellValue(col.Header)
                 });
             }
-
-            writer.WriteEndElement();
+            writer.WriteEndElement(); // Row
         }
 
         private static Func<object, object?>[] GetAccessors<T>(IReadOnlyList<ExcelColumn> columns)
@@ -176,7 +160,15 @@ namespace Analitics6400.Logic.Services.XmlWriters
             switch (value)
             {
                 case string s:
-                    WriteString(writer, s);
+                    if (s.Length > XmlConstants.MaxCellTextLength)
+                    {
+                        int allowedLength = XmlConstants.MaxCellTextLength - XmlConstants.JsonOverflowNotice.Length;
+                        if (allowedLength < 0) allowedLength = XmlConstants.MaxCellTextLength;
+                        string truncated = s.Substring(0, allowedLength) + XmlConstants.JsonOverflowNotice;
+                        WriteString(writer, truncated);
+                    }
+                    else
+                        WriteString(writer, s);
                     break;
 
                 case Guid g:
@@ -195,8 +187,7 @@ namespace Analitics6400.Logic.Services.XmlWriters
                     writer.WriteElement(new Cell
                     {
                         DataType = CellValues.Number,
-                        CellValue = new CellValue(
-                            dt.ToOADate().ToString(CultureInfo.InvariantCulture))
+                        CellValue = new CellValue(dt.ToOADate().ToString(CultureInfo.InvariantCulture))
                     });
                     break;
 
@@ -205,8 +196,7 @@ namespace Analitics6400.Logic.Services.XmlWriters
                     writer.WriteElement(new Cell
                     {
                         DataType = CellValues.Number,
-                        CellValue = new CellValue(
-                            Convert.ToString(value, CultureInfo.InvariantCulture)!)
+                        CellValue = new CellValue(Convert.ToString(value, CultureInfo.InvariantCulture)!)
                     });
                     break;
 

@@ -5,6 +5,7 @@ using Analitics6400.Logic.Services.XmlWriters.Models;
 using Analitics6400.Logic.Test.Interfaces;
 using DocumentFormat.OpenXml.Spreadsheet;
 using System.Diagnostics;
+using System.Text.Json.Nodes;
 using System.Xml;
 
 namespace Analitics6400.Logic.Test;
@@ -65,7 +66,7 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
             new("Published", typeof(DateTime?)),
             new("IsArchived", typeof(bool)),
             new("Version", typeof(double)),
-            new("JsonData", typeof(string)),
+            new("JsonData", typeof(JsonObject)),
             new("IsCanForValidate", typeof(bool)),
             new("ChangedDateUtc", typeof(DateTime?))
         };

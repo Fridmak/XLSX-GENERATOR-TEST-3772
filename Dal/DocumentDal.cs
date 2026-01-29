@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json.Nodes;
 
 namespace Analitics6400.Dal;
 
@@ -24,7 +25,7 @@ public class Document
     public bool IsCanForValidate { get; set; }
 
     [Description("Данные документа")]
-    public string JsonData { get; set; } = string.Empty; // Для EF Core и jsonb
+    public JsonObject? JsonData { get; set; }
 
     [Description("Дата изменения")]
     public DateTime? ChangedDateUtc { get; set; }
