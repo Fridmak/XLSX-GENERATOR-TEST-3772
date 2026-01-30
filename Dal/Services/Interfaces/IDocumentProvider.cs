@@ -1,4 +1,4 @@
-using Analitics6400.Logic.Models;
+﻿using Analitics6400.Logic.Models;
 using System.Runtime.CompilerServices;
 
 namespace Analitics6400.Dal.Services.Interfaces;

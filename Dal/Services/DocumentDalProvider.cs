@@ -1,4 +1,4 @@
-using Analitics6400.Dal.Services.Interfaces;
+﻿using Analitics6400.Dal.Services.Interfaces;
 using Analitics6400.Logic.Models;
 using Microsoft.EntityFrameworkCore;
 using System.Runtime.CompilerServices;

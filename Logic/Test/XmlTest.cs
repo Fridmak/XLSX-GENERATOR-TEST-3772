@@ -1,4 +1,4 @@
-using Analitics6400.Dal.Services.Interfaces;
+п»їusing Analitics6400.Dal.Services.Interfaces;
 using Analitics6400.Logic.Models;
 using Analitics6400.Logic.Services.XmlWriters.Interfaces;
 using Analitics6400.Logic.Services.XmlWriters.Models;
@@ -28,7 +28,7 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
         _settings = options.Value;
     }
 
-    #region Разогрев
+    #region Р Р°Р·РѕРіСЂРµРІ
 
     private async Task StartUp()
     {
@@ -46,7 +46,7 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
 
         var rows = _documentProvider.GetDocumentsAsync(limit: 2000);
 
-        _logger.LogInformation("Разогрев генератора без записи в файл...");
+        _logger.LogInformation("Р Р°Р·РѕРіСЂРµРІ РіРµРЅРµСЂР°С‚РѕСЂР° Р±РµР· Р·Р°РїРёСЃРё РІ С„Р°Р№Р»...");
 
         var nullStream = new NullStream();
         var stopwatch = Stopwatch.StartNew();
@@ -54,14 +54,14 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
         await _writer.GenerateAsync(rows, columns, nullStream);
 
         stopwatch.Stop();
-        _logger.LogInformation($"Разогрев завершен. Время: {stopwatch.Elapsed.TotalSeconds:F2} секунд");
+        _logger.LogInformation($"Р Р°Р·РѕРіСЂРµРІ Р·Р°РІРµСЂС€РµРЅ. Р’СЂРµРјСЏ: {stopwatch.Elapsed.TotalSeconds:F2} СЃРµРєСѓРЅРґ");
     }
 
     #endregion
 
     public async Task RunAsync(CancellationToken ct = default)
     {
-        //await StartUp(); // Не для openxml. Надо для него переделать
+        //await StartUp(); // РќРµ РґР»СЏ openxml. РќР°РґРѕ РґР»СЏ РЅРµРіРѕ РїРµСЂРµРґРµР»Р°С‚СЊ
 
         var columns = new List<ExcelColumn>
         {
@@ -75,7 +75,7 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
             new("ChangedDateUtc", typeof(DateTime?))
         };
 
-        _logger.LogInformation("Начало генерации CSV");
+        _logger.LogInformation("РќР°С‡Р°Р»Рѕ РіРµРЅРµСЂР°С†РёРё CSV");
         var stopwatch = Stopwatch.StartNew();
 
         int rowCount = 0;
@@ -86,7 +86,7 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
             var fileName = $"DocumentsReport_{DateTime.UtcNow:yyyyMMdd_HHmmss}.{_writer.Extension}";
             await using var fs = new FileStream(fileName, FileMode.Create, FileAccess.ReadWrite, FileShare.None, bufferSize: 1024 * 1024);
 
-            _logger.LogInformation($"Вызов генератора {_writer.ToString()} для {nameof(fileName)}: {fileName}");
+            _logger.LogInformation($"Р’С‹Р·РѕРІ РіРµРЅРµСЂР°С‚РѕСЂР° {_writer.ToString()} РґР»СЏ {nameof(fileName)}: {fileName}");
 
             async IAsyncEnumerable<DocumentDtoModel> CountRows(
                 IAsyncEnumerable<DocumentDtoModel> source,
@@ -119,11 +119,11 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
 
                     if (rowCount % 1000 == 0)
                     {
-                        //_logger.LogInformation($"Обработано строк: {rowCount}");
-                        //_logger.LogInformation($"Максимальный размер JSON: {maxSize} bytes");
+                        //_logger.LogInformation($"РћР±СЂР°Р±РѕС‚Р°РЅРѕ СЃС‚СЂРѕРє: {rowCount}");
+                        //_logger.LogInformation($"РњР°РєСЃРёРјР°Р»СЊРЅС‹Р№ СЂР°Р·РјРµСЂ JSON: {maxSize} bytes");
 
                         //var avgSize = row.JsonData != null ? currentRowSize : 0;
-                        //_logger.LogDebug($"Текущий размер: {currentRowSize} bytes");
+                        //_logger.LogDebug($"РўРµРєСѓС‰РёР№ СЂР°Р·РјРµСЂ: {currentRowSize} bytes");
                     }
 
                     yield return row;
@@ -133,23 +133,23 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
             await _writer.GenerateAsync(CountRows(rows), columns, fs, ct);
 
             stopwatch.Stop();
-            _logger.LogInformation($"Файл сгенерирован: {fileName}");
-            _logger.LogInformation($"Всего обработано строк: {rowCount}");
-            _logger.LogInformation($"Время выполнения: {stopwatch.Elapsed.TotalSeconds:F2} секунд");
+            _logger.LogInformation($"Р¤Р°Р№Р» СЃРіРµРЅРµСЂРёСЂРѕРІР°РЅ: {fileName}");
+            _logger.LogInformation($"Р’СЃРµРіРѕ РѕР±СЂР°Р±РѕС‚Р°РЅРѕ СЃС‚СЂРѕРє: {rowCount}");
+            _logger.LogInformation($"Р’СЂРµРјСЏ РІС‹РїРѕР»РЅРµРЅРёСЏ: {stopwatch.Elapsed.TotalSeconds:F2} СЃРµРєСѓРЅРґ");
         }
         catch (OperationCanceledException)
         {
             stopwatch.Stop();
-            _logger.LogWarning("Генерация была отменена пользователем");
-            _logger.LogInformation($"Обработано строк до отмены: {rowCount}");
-            _logger.LogInformation($"Время выполнения до отмены: {stopwatch.Elapsed.TotalSeconds:F2} секунд");
+            _logger.LogWarning("Р“РµРЅРµСЂР°С†РёСЏ Р±С‹Р»Р° РѕС‚РјРµРЅРµРЅР° РїРѕР»СЊР·РѕРІР°С‚РµР»РµРј");
+            _logger.LogInformation($"РћР±СЂР°Р±РѕС‚Р°РЅРѕ СЃС‚СЂРѕРє РґРѕ РѕС‚РјРµРЅС‹: {rowCount}");
+            _logger.LogInformation($"Р’СЂРµРјСЏ РІС‹РїРѕР»РЅРµРЅРёСЏ РґРѕ РѕС‚РјРµРЅС‹: {stopwatch.Elapsed.TotalSeconds:F2} СЃРµРєСѓРЅРґ");
         }
         catch (Exception ex)
         {
             stopwatch.Stop();
-            _logger.LogError(ex, "Ошибка при генерации CSV");
-            _logger.LogInformation($"Обработано строк до ошибки: {rowCount}");
-            _logger.LogInformation($"Время выполнения до ошибки: {stopwatch.Elapsed.TotalSeconds:F2} секунд");
+            _logger.LogError(ex, "РћС€РёР±РєР° РїСЂРё РіРµРЅРµСЂР°С†РёРё CSV");
+            _logger.LogInformation($"РћР±СЂР°Р±РѕС‚Р°РЅРѕ СЃС‚СЂРѕРє РґРѕ РѕС€РёР±РєРё: {rowCount}");
+            _logger.LogInformation($"Р’СЂРµРјСЏ РІС‹РїРѕР»РЅРµРЅРёСЏ РґРѕ РѕС€РёР±РєРё: {stopwatch.Elapsed.TotalSeconds:F2} СЃРµРєСѓРЅРґ");
             throw;
         }
     }

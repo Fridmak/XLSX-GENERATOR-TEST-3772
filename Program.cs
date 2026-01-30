@@ -1,4 +1,4 @@
-using Analitics6400.Dal;
+п»їusing Analitics6400.Dal;
 using Analitics6400.Dal.Services;
 using Analitics6400.Dal.Services.Interfaces;
 using Analitics6400.Logic.Models;
@@ -60,11 +60,11 @@ public class Programm
         builder.Services.AddTransient<IXmlWriter, AbankingClosedXmlWriter>();
         builder.Services.AddTransient<IXmlWriter, AbankingClosedXmlWriterForeign>();
 
-        // Выбираем нужный:
+        // Р’С‹Р±РёСЂР°РµРј РЅСѓР¶РЅС‹Р№:
         builder.Services.AddTransient<IXmlTest, XmlTest<AbankingOpenXmlWriter>>();
         builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriter>>();
-        builder.Services.AddTransient<IXmlTest, XmlTest<AbankingCsvWriter>>(); // Полностю рабочий и корректный
-        builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriterForeign>>(); // Из mvp ТА другого разработчика
+        builder.Services.AddTransient<IXmlTest, XmlTest<AbankingCsvWriter>>(); // РџРѕР»РЅРѕСЃС‚СЋ СЂР°Р±РѕС‡РёР№ Рё РєРѕСЂСЂРµРєС‚РЅС‹Р№
+        builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriterForeign>>(); // РР· mvp РўРђ РґСЂСѓРіРѕРіРѕ СЂР°Р·СЂР°Р±РѕС‚С‡РёРєР°
     }
 
     private static void SetSettings(WebApplicationBuilder builder)
@@ -73,15 +73,15 @@ public class Programm
             builder.Configuration.GetSection(nameof(XmlTestSettings)));
     }
 
-    #region Заполнение бд документами
+    #region Р—Р°РїРѕР»РЅРµРЅРёРµ Р±Рґ РґРѕРєСѓРјРµРЅС‚Р°РјРё
     /// <summary>
-    /// Начать заполнение бд тестовыми данными
+    /// РќР°С‡Р°С‚СЊ Р·Р°РїРѕР»РЅРµРЅРёРµ Р±Рґ С‚РµСЃС‚РѕРІС‹РјРё РґР°РЅРЅС‹РјРё
     /// </summary>
     /// <param name="app"></param>
     /// <returns></returns>
     private static async Task StartFillingDbWithDocuments(WebApplication app, int documentsCount)
     {
-        using (var scope = app.Services.CreateScope()) // Генерация в бд
+        using (var scope = app.Services.CreateScope()) // Р“РµРЅРµСЂР°С†РёСЏ РІ Р±Рґ
         {
             var db = scope.ServiceProvider.GetRequiredService<DocumentDbContext>();
             db.Database.Migrate();

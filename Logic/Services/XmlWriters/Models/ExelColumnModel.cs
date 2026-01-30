@@ -1,4 +1,4 @@
-namespace Analitics6400.Logic.Services.XmlWriters.Models;
+﻿namespace Analitics6400.Logic.Services.XmlWriters.Models;
 
 public sealed class ExcelColumn
 {

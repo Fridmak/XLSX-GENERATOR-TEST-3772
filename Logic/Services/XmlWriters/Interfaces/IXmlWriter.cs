@@ -1,4 +1,4 @@
-using Analitics6400.Logic.Services.XmlWriters.Models;
+﻿using Analitics6400.Logic.Services.XmlWriters.Models;
 
 namespace Analitics6400.Logic.Services.XmlWriters.Interfaces;
 

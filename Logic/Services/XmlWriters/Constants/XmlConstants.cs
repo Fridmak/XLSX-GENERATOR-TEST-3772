@@ -1,4 +1,4 @@
-namespace Analitics6400.Logic.Services.XmlWriters.Constants;
+п»їnamespace Analitics6400.Logic.Services.XmlWriters.Constants;
 
 public static class XmlConstants
 {
@@ -6,7 +6,7 @@ public static class XmlConstants
 
     public const string ClosedXmlName = "ClosedXml";
 
-    public const string JsonOverflowNotice = " ... Используйте генерацию CSV чтобы увидеть полностью";
+    public const string JsonOverflowNotice = " ... РСЃРїРѕР»СЊР·СѓР№С‚Рµ РіРµРЅРµСЂР°С†РёСЋ CSV С‡С‚РѕР±С‹ СѓРІРёРґРµС‚СЊ РїРѕР»РЅРѕСЃС‚СЊСЋ";
 
     public const int ExcelMaxRows = 1_048_576 - 1;
 

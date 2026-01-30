@@ -1,4 +1,4 @@
-using Analitics6400.Logic.Test.Interfaces;
+﻿using Analitics6400.Logic.Test.Interfaces;
 
 public class TestsBgRunner : BackgroundService
 {

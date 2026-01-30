@@ -53,7 +53,6 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
 
         await foreach (var row in rows.WithCancellation(ct))
         {
-            // 1️⃣ Сериализация и разбивка всех колонок на чанки
             var columnChunks = new List<string[]>(columns.Count);
             int maxChunks = 1;
 
@@ -74,7 +73,6 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
                     maxChunks = chunks.Length;
             }
 
-            // 2️⃣ Проверка на переполнение листа
             if (rowIndex + (uint)(maxChunks - 1) > XmlConstants.ExcelMaxRows)
             {
                 CloseSheet(writer);
@@ -86,7 +84,6 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
                 rowIndex = 2;
             }
 
-            // 3️⃣ Создание maxChunks строк с выравниванием колонок
             for (int chunkIdx = 0; chunkIdx < maxChunks; chunkIdx++)
             {
                 writer.WriteStartElement(new Row { RowIndex = rowIndex });
@@ -104,7 +101,6 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
 
             columnChunks.Clear();
 
-            // 4️⃣ Асинхронная пауза для больших потоков
             if (rowIndex % 1000 == 0)
                 await Task.Yield();
         }
@@ -112,8 +108,6 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
         CloseSheet(writer);
         workbookPart.Workbook.Save();
     }
-
-    // ========================= helpers =========================
 
     private static IEnumerable<string> SplitByExcelLimit(string text)
     {

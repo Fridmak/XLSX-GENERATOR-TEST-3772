@@ -1,4 +1,4 @@
-using Analitics6400.Dal;
+﻿using Analitics6400.Dal;
 using Microsoft.EntityFrameworkCore;
 using System.Text;
 using System.Text.Json.Nodes;
