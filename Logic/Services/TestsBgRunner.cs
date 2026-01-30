@@ -27,7 +27,7 @@ public class TestsBgRunner : BackgroundService
             }
             catch (Exception ex) 
             {
-                _logger.LogError(ex.Message);
+                 _logger.LogError(ex.Message);
             }
         }
     }

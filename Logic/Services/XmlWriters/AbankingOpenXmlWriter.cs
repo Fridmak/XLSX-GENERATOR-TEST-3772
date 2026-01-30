@@ -1,4 +1,4 @@
-using Analitics6400.Logic.Services.XmlWriters.Constants;
+﻿using Analitics6400.Logic.Services.XmlWriters.Constants;
 using Analitics6400.Logic.Services.XmlWriters.Interfaces;
 using Analitics6400.Logic.Services.XmlWriters.Models;
 using DocumentFormat.OpenXml;
@@ -6,6 +6,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
 using System.Collections.Concurrent;
 using System.Reflection;
+using System.Text.Json;
 
 namespace Analitics6400.Logic.Services.XmlWriters;
 
@@ -14,7 +15,7 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
     private static readonly ConcurrentDictionary<(Type Type, string ColumnsKey), Func<object, object?>[]> _propertyAccessors = new();
     private readonly ILogger<AbankingOpenXmlWriter> _logger;
 
-    public string Extension => ".xlsx";
+    public string Extension => "xlsx";
 
     public AbankingOpenXmlWriter(ILogger<AbankingOpenXmlWriter> logger)
     {
@@ -28,9 +29,7 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
         CancellationToken ct = default)
     {
         if (columns == null || columns.Count == 0)
-        {
             throw new ArgumentException("Columns cannot be empty", nameof(columns));
-        }
 
         using var document = SpreadsheetDocument.Create(
             output,
@@ -54,34 +53,40 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
 
         await foreach (var row in rows.WithCancellation(ct))
         {
-            int maxChunks = 1;
+            // 1️⃣ Сериализация и разбивка всех колонок на чанки
             var columnChunks = new List<string[]>(columns.Count);
+            int maxChunks = 1;
 
             for (int c = 0; c < columns.Count; c++)
             {
                 var value = accessors[c](row);
-                var text = value?.ToString() ?? string.Empty;
+                string text = value switch
+                {
+                    null => string.Empty,
+                    string s => s,
+                    _ => JsonSerializer.Serialize(value)
+                };
+
                 var chunks = SplitByExcelLimit(text).ToArray();
                 columnChunks.Add(chunks);
 
                 if (chunks.Length > maxChunks)
-                {
                     maxChunks = chunks.Length;
-                }
             }
 
+            // 2️⃣ Проверка на переполнение листа
             if (rowIndex + (uint)(maxChunks - 1) > XmlConstants.ExcelMaxRows)
             {
                 CloseSheet(writer);
                 sheetId++;
                 rowIndex = 1;
-
                 worksheetPart = CreateWorksheetPart(workbookPart, sheets, sheetId);
                 writer = CreateSheetWriter(worksheetPart);
                 WriteHeader(writer, columns);
                 rowIndex = 2;
             }
 
+            // 3️⃣ Создание maxChunks строк с выравниванием колонок
             for (int chunkIdx = 0; chunkIdx < maxChunks; chunkIdx++)
             {
                 writer.WriteStartElement(new Row { RowIndex = rowIndex });
@@ -90,51 +95,66 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
                 {
                     var chunks = columnChunks[c];
                     var value = chunkIdx < chunks.Length ? chunks[chunkIdx] : string.Empty;
-                    WriteCell(writer, c + 1, rowIndex, value);
+                    WriteCellInline(writer, c + 1, rowIndex, value);
                 }
 
-                writer.WriteEndElement();
+                writer.WriteEndElement(); // Row
                 rowIndex++;
             }
 
             columnChunks.Clear();
 
+            // 4️⃣ Асинхронная пауза для больших потоков
             if (rowIndex % 1000 == 0)
-            {
                 await Task.Yield();
-            }
         }
 
         CloseSheet(writer);
         workbookPart.Workbook.Save();
     }
 
+    // ========================= helpers =========================
+
     private static IEnumerable<string> SplitByExcelLimit(string text)
     {
         if (string.IsNullOrEmpty(text))
-        {
-            yield break;
-        }
+            yield return string.Empty;
 
-        for (int i = 0; i < text.Length; i += XmlConstants.MaxCellTextLength)
+        const int MaxCellTextLength = 32_767;
+
+        for (int i = 0; i < text.Length; i += MaxCellTextLength)
         {
-            int length = Math.Min(XmlConstants.MaxCellTextLength, text.Length - i);
+            int length = Math.Min(MaxCellTextLength, text.Length - i);
             yield return text.Substring(i, length);
         }
     }
 
-    private static WorksheetPart CreateWorksheetPart(
-        WorkbookPart workbookPart,
-        Sheets sheets,
-        uint sheetId)
+    private static void WriteCellInline(OpenXmlWriter writer, int columnIndex, uint rowIndex, string text)
+    {
+        writer.WriteStartElement(new Cell
+        {
+            CellReference = GetColumnName(columnIndex) + rowIndex,
+            DataType = CellValues.InlineString
+        });
+
+        writer.WriteStartElement(new InlineString());
+        writer.WriteElement(new Text(text) { Space = SpaceProcessingModeValues.Preserve });
+        writer.WriteEndElement(); // InlineString
+
+        writer.WriteEndElement(); // Cell
+    }
+
+    private static WorksheetPart CreateWorksheetPart(WorkbookPart workbookPart, Sheets sheets, uint sheetId)
     {
         var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
+
         sheets.Append(new Sheet
         {
             Id = workbookPart.GetIdOfPart(worksheetPart),
             SheetId = sheetId,
             Name = $"Sheet{sheetId}"
         });
+
         return worksheetPart;
     }
 
@@ -158,33 +178,9 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
         writer.WriteStartElement(new Row { RowIndex = 1 });
 
         for (int i = 0; i < columns.Count; i++)
-        {
-            WriteCell(writer, i + 1, 1, columns[i].Header ?? string.Empty);
-        }
+            WriteCellInline(writer, i + 1, 1, columns[i].Header ?? string.Empty);
 
         writer.WriteEndElement(); // Row
-    }
-
-    private static void WriteCell(
-        OpenXmlWriter writer,
-        int columnIndex,
-        uint rowIndex,
-        string text)
-    {
-        writer.WriteStartElement(new Cell
-        {
-            CellReference = GetColumnName(columnIndex) + rowIndex,
-            DataType = CellValues.InlineString
-        });
-
-        writer.WriteStartElement(new InlineString());
-        writer.WriteElement(new Text(text)
-        {
-            Space = SpaceProcessingModeValues.Preserve
-        });
-        writer.WriteEndElement(); // InlineString
-
-        writer.WriteEndElement(); // Cell
     }
 
     private static string GetColumnName(int columnIndex)
@@ -192,13 +188,12 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
         const string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
         string result = "";
 
-        do
+        while (columnIndex > 0)
         {
             int rem = (columnIndex - 1) % 26;
             result = letters[rem] + result;
             columnIndex = (columnIndex - 1) / 26;
         }
-        while (columnIndex > 0);
 
         return result;
     }
@@ -206,6 +201,7 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
     private static Func<object, object?>[] GetAccessors<T>(IReadOnlyList<ExcelColumn> columns)
     {
         var key = (typeof(T), string.Join("|", columns.Select(c => c.Name)));
+
         return _propertyAccessors.GetOrAdd(key, _ =>
         {
             var props = typeof(T)

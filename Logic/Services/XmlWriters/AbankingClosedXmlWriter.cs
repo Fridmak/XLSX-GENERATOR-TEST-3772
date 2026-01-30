@@ -4,6 +4,7 @@ using Analitics6400.Logic.Services.XmlWriters.Models;
 using ClosedXML.Excel;
 using System.Collections.Concurrent;
 using System.Reflection;
+using System.Text.Json;
 
 namespace Analitics6400.Logic.Services.XmlWriters;
 
@@ -34,51 +35,80 @@ public sealed class AbankingClosedXmlWriter : IXmlWriter
         WriteHeader(ws, columns);
 
         var accessors = GetAccessors<T>(columns);
-        int rowIndex = 2;
+        int currentRow = 2;
 
         await foreach (var row in rows.WithCancellation(ct))
         {
-            int maxRowInObject = rowIndex;
+            int maxRowOffset = 1; // Максимальное количество строк, которое займёт этот объект
 
+            // Собираем для каждой колонки куски текста
+            var chunksPerColumn = new string[columns.Count][];
             for (int c = 0; c < columns.Count; c++)
             {
-                var value = accessors[c](row!);
-                var text = value?.ToString() ?? string.Empty;
+                object? value = accessors[c](row!);
 
-                WriteValueInChunks(ws, c + 1, text, ref maxRowInObject, ref sheetId, workbook, columns);
+                // Преобразуем объекты в безопасные строки
+                string text;
+                if (value == null)
+                    text = string.Empty;
+                else if (value is string s)
+                    text = s;
+                else
+                {
+                    try { text = JsonSerializer.Serialize(value); }
+                    catch { text = value.ToString() ?? string.Empty; }
+                }
+
+                // Разбиваем на куски по лимиту
+                chunksPerColumn[c] = SplitIntoChunks(text, XmlConstants.MaxCellTextLength);
+                if (chunksPerColumn[c].Length > maxRowOffset)
+                    maxRowOffset = chunksPerColumn[c].Length;
             }
 
-            rowIndex = maxRowInObject;
+            // Записываем куски по всем колонкам, выравнивая по строкам
+            for (int offset = 0; offset < maxRowOffset; offset++)
+            {
+                // Если превысили лимит строк Excel, создаём новый лист
+                if (currentRow > XmlConstants.ExcelMaxRows)
+                {
+                    sheetId++;
+                    ws = workbook.AddWorksheet(GetSheetName(sheetId));
+                    WriteHeader(ws, columns);
+                    currentRow = 2;
+                }
 
-            if (rowIndex % 1000 == 0)
+                for (int c = 0; c < columns.Count; c++)
+                {
+                    string chunkText = offset < chunksPerColumn[c].Length ? chunksPerColumn[c][offset] : string.Empty;
+                    ws.Cell(currentRow, c + 1).SetValue(chunkText);
+                }
+
+                currentRow++;
+            }
+
+            // Чтобы UI/CPU не блокировался при огромных данных
+            if (currentRow % 1000 == 0)
                 await Task.Yield();
         }
 
         workbook.SaveAs(output);
     }
 
-    private static void WriteValueInChunks(IXLWorksheet ws, int column, string text, ref int rowIndex, ref int sheetId, XLWorkbook workbook, IReadOnlyList<ExcelColumn> columns)
+    // Разделение текста на куски
+    private static string[] SplitIntoChunks(string text, int maxLength)
     {
-        int maxLen = XmlConstants.MaxCellTextLength;
-        int start = 0;
+        if (string.IsNullOrEmpty(text))
+            return new[] { string.Empty };
 
+        var chunks = new List<string>();
+        int start = 0;
         while (start < text.Length)
         {
-            int length = Math.Max(0, Math.Min(maxLen, text.Length - start));
-            string chunk = text.Substring(start, length);
-
-            if (rowIndex > XmlConstants.ExcelMaxRows)
-            {
-                sheetId++;
-                ws = workbook.AddWorksheet(GetSheetName(sheetId));
-                WriteHeader(ws, columns);
-                rowIndex = 2;
-            }
-
-            ws.Cell(rowIndex, column).SetValue(chunk);
-            rowIndex++;
-            start += length;
+            int len = Math.Min(maxLength, text.Length - start);
+            chunks.Add(text.Substring(start, len));
+            start += len;
         }
+        return chunks.ToArray();
     }
 
     private static string GetSheetName(int sheetId) => $"Sheet{sheetId}";

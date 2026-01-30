@@ -6,6 +6,7 @@ using Analitics6400.Logic.Test.Interfaces;
 using DocumentFormat.OpenXml.Spreadsheet;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Xml;
 
@@ -85,15 +86,45 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
             var fileName = $"DocumentsReport_{DateTime.UtcNow:yyyyMMdd_HHmmss}.{_writer.Extension}";
             await using var fs = new FileStream(fileName, FileMode.Create, FileAccess.ReadWrite, FileShare.None, bufferSize: 1024 * 1024);
 
-            _logger.LogInformation($"Вызов генератора {nameof(T)} для {nameof(fileName)}: {fileName}");
+            _logger.LogInformation($"Вызов генератора {_writer.ToString()} для {nameof(fileName)}: {fileName}");
 
-            async IAsyncEnumerable<TItem> CountRows<TItem>(IAsyncEnumerable<TItem> source)
+            async IAsyncEnumerable<DocumentDtoModel> CountRows(
+                IAsyncEnumerable<DocumentDtoModel> source,
+                CancellationToken ct = default)
             {
+                var rowCount = 0;
+                var maxSize = 0L;
+                var jsonOptions = new JsonSerializerOptions
+                {
+                    WriteIndented = false
+                };
+
                 await foreach (var row in source.WithCancellation(ct))
                 {
+                    long currentRowSize = 0;
+
+                    if (row.JsonData != null)
+                    {
+                        using var memoryStream = new MemoryStream();
+                        using var writer = new Utf8JsonWriter(memoryStream);
+                        row.JsonData.WriteTo(writer);
+                        writer.Flush();
+                        currentRowSize = memoryStream.Length;
+                    }
+
+                    currentRowSize += 100;
+
+                    maxSize = Math.Max(maxSize, currentRowSize);
                     rowCount++;
+
                     if (rowCount % 1000 == 0)
-                        _logger.LogInformation($"Обработано строк: {rowCount}");
+                    {
+                        //_logger.LogInformation($"Обработано строк: {rowCount}");
+                        //_logger.LogInformation($"Максимальный размер JSON: {maxSize} bytes");
+
+                        //var avgSize = row.JsonData != null ? currentRowSize : 0;
+                        //_logger.LogDebug($"Текущий размер: {currentRowSize} bytes");
+                    }
 
                     yield return row;
                 }
