@@ -8,10 +8,11 @@ public static class XmlConstants
 
     public const string JsonOverflowNotice = " ... Используйте генерацию CSV чтобы увидеть полностью";
 
-    public const int ExcelMaxRows = 1_048_576 - 1;
+    public const int ExcelMaxRows = 1_048_576 - 100_000;
 
-    //public const int ExcelMaxRows = 340_576 - 1;
-    //public const int MaxCellTextLength = 32_767 - 1;
+    public const int MaxCellTextLength = 32_767 - 100;
 
-    public const int MaxCellTextLength = 31_767 - 1;
+    public const long MaxSheetBytes = 999 * 1024 * 1024 ; // мягкое ограничение до 2ГБ (предел для формирования zip из xml)
+
+    public const int TextChunkSize = 67 * 1024; // очень мягкий предел для чанка текста
 }

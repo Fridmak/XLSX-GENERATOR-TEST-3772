@@ -94,6 +94,7 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
             {
                 var rowCount = 0;
                 var maxSize = 0L;
+                var totalSize = 0L;
                 var jsonOptions = new JsonSerializerOptions
                 {
                     WriteIndented = false
@@ -102,35 +103,48 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
                 await foreach (var row in source.WithCancellation(ct))
                 {
                     long currentRowSize = 0;
-
                     if (row.JsonData != null)
                     {
-                        using var memoryStream = new MemoryStream();
-                        using var writer = new Utf8JsonWriter(memoryStream);
+                        var countingStream = new CountingStream();
+                        using var writer = new Utf8JsonWriter(countingStream, new JsonWriterOptions { Indented = false });
                         row.JsonData.WriteTo(writer);
                         writer.Flush();
-                        currentRowSize = memoryStream.Length;
+
+                        currentRowSize = countingStream.LengthWritten;
                     }
 
-                    currentRowSize += 100;
-
                     maxSize = Math.Max(maxSize, currentRowSize);
+                    totalSize += currentRowSize;
                     rowCount++;
 
                     if (rowCount % 1000 == 0)
                     {
-                        //_logger.LogInformation($"Обработано строк: {rowCount}");
-                        //_logger.LogInformation($"Максимальный размер JSON: {maxSize} bytes");
+                        var meanSize = rowCount > 0 ? totalSize / rowCount : 0;
 
-                        //var avgSize = row.JsonData != null ? currentRowSize : 0;
-                        //_logger.LogDebug($"Текущий размер: {currentRowSize} bytes");
+                        _logger.LogInformation($"Обработано строк: {rowCount}");
+                        _logger.LogInformation($"Максимальный размер JSON: {maxSize} bytes");
+                        _logger.LogInformation($"Средний размер JSON: {meanSize} bytes");
+
+                        _logger.LogDebug($"Текущий размер: {currentRowSize} bytes");
                     }
 
                     yield return row;
                 }
+
+                // Финальная статистика
+                if (rowCount > 0)
+                {
+                    var finalMeanSize = totalSize / rowCount;
+
+                    _logger.LogInformation($"=== ФИНАЛЬНАЯ СТАТИСТИКА ===");
+                    _logger.LogInformation($"Всего строк: {rowCount}");
+                    _logger.LogInformation($"Максимальный размер: {maxSize} bytes ({maxSize / 1024.0:F2} KB)");
+                    _logger.LogInformation($"Средний размер: {finalMeanSize} bytes ({finalMeanSize / 1024.0:F2} KB)");
+                    _logger.LogInformation($"Общий объем: {totalSize} bytes ({totalSize / 1024.0 / 1024.0:F2} MB)");
+                }
             }
 
-            await _writer.GenerateAsync(CountRows(rows), columns, fs, ct);
+            await _writer.GenerateAsync(rows, columns, fs, ct);
 
             stopwatch.Stop();
             _logger.LogInformation($"Файл сгенерирован: {fileName}");

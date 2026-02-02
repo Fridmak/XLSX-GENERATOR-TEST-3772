@@ -2,7 +2,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Nodes;
 
-namespace Analitics6400.Dal;
+namespace Analitics6400.Dal.Services;
 
 public class Document
 {

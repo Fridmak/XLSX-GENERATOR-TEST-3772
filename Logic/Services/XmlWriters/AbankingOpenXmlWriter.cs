@@ -4,6 +4,7 @@ using Analitics6400.Logic.Services.XmlWriters.Models;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
+using Microsoft.Extensions.Logging;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.Json;
@@ -12,7 +13,7 @@ namespace Analitics6400.Logic.Services.XmlWriters;
 
 public sealed class AbankingOpenXmlWriter : IXmlWriter
 {
-    private static readonly ConcurrentDictionary<(Type Type, string ColumnsKey), Func<object, object?>[]> _propertyAccessors = new();
+    private static readonly ConcurrentDictionary<(Type, string), Func<object, object?>[]> _accessors = new();
     private readonly ILogger<AbankingOpenXmlWriter> _logger;
 
     public string Extension => "xlsx";
@@ -28,9 +29,6 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
         Stream output,
         CancellationToken ct = default)
     {
-        if (columns == null || columns.Count == 0)
-            throw new ArgumentException("Columns cannot be empty", nameof(columns));
-
         using var document = SpreadsheetDocument.Create(
             output,
             SpreadsheetDocumentType.Workbook,
@@ -40,8 +38,11 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
         workbookPart.Workbook = new Workbook();
         var sheets = workbookPart.Workbook.AppendChild(new Sheets());
 
+        var accessors = GetAccessors<T>(columns);
+
         uint sheetId = 1;
         uint rowIndex = 1;
+        long sheetSize = 0; // нужен для предотвращения ошибки Stream was too long при переносе в zip xml документа
 
         var worksheetPart = CreateWorksheetPart(workbookPart, sheets, sheetId);
         var writer = CreateSheetWriter(worksheetPart);
@@ -49,81 +50,99 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
         WriteHeader(writer, columns);
         rowIndex = 2;
 
-        var accessors = GetAccessors<T>(columns);
-
         await foreach (var row in rows.WithCancellation(ct))
         {
-            var columnChunks = new List<string[]>(columns.Count);
-            int maxChunks = 1;
+            var split = SplitRow(row, accessors, columns, out int maxChunks);
+            long estimated = EstimateRowSize(split);
 
-            for (int c = 0; c < columns.Count; c++)
+            if (sheetSize + estimated > XmlConstants.MaxSheetBytes ||
+                rowIndex + maxChunks > XmlConstants.ExcelMaxRows)
             {
-                var value = accessors[c](row);
-                string text = value switch
-                {
-                    null => string.Empty,
-                    string s => s,
-                    _ => JsonSerializer.Serialize(value)
-                };
+                CloseSheet(writer, worksheetPart);
 
-                var chunks = SplitByExcelLimit(text).ToArray();
-                columnChunks.Add(chunks);
-
-                if (chunks.Length > maxChunks)
-                    maxChunks = chunks.Length;
-            }
-
-            if (rowIndex + (uint)(maxChunks - 1) > XmlConstants.ExcelMaxRows)
-            {
-                CloseSheet(writer);
                 sheetId++;
                 rowIndex = 1;
+                sheetSize = 0;
+
                 worksheetPart = CreateWorksheetPart(workbookPart, sheets, sheetId);
                 writer = CreateSheetWriter(worksheetPart);
                 WriteHeader(writer, columns);
                 rowIndex = 2;
             }
 
-            for (int chunkIdx = 0; chunkIdx < maxChunks; chunkIdx++)
+            for (int chunk = 0; chunk < maxChunks; chunk++)
             {
                 writer.WriteStartElement(new Row { RowIndex = rowIndex });
 
                 for (int c = 0; c < columns.Count; c++)
                 {
-                    var chunks = columnChunks[c];
-                    var value = chunkIdx < chunks.Length ? chunks[chunkIdx] : string.Empty;
-                    WriteCellInline(writer, c + 1, rowIndex, value);
+                    var text = chunk < split[c].Length
+                        ? split[c][chunk]
+                        : ReadOnlyMemory<char>.Empty;
+
+                    WriteCell(writer, c + 1, rowIndex, text.Span);
                 }
 
                 writer.WriteEndElement(); // Row
                 rowIndex++;
             }
 
-            columnChunks.Clear();
+            sheetSize += estimated;
 
             if (rowIndex % 1000 == 0)
+            {
                 await Task.Yield();
+            }
         }
 
-        CloseSheet(writer);
-        workbookPart.Workbook.Save();
+        CloseSheet(writer, worksheetPart);
     }
 
-    private static IEnumerable<string> SplitByExcelLimit(string text)
+    // ---------------- helpers ----------------
+
+    private static ReadOnlyMemory<char>[][] SplitRow<T>(
+        T row,
+        Func<object, object?>[] accessors,
+        IReadOnlyList<ExcelColumn> columns,
+        out int maxChunks)
     {
-        if (string.IsNullOrEmpty(text))
-            yield return string.Empty;
+        var result = new ReadOnlyMemory<char>[columns.Count][];
+        maxChunks = 1;
 
-        const int MaxCellTextLength = 32_767;
-
-        for (int i = 0; i < text.Length; i += MaxCellTextLength)
+        for (int i = 0; i < columns.Count; i++)
         {
-            int length = Math.Min(MaxCellTextLength, text.Length - i);
-            yield return text.Substring(i, length);
+            var value = accessors[i](row);
+            var text = value switch
+            {
+                null => string.Empty,
+                string s => s,
+                _ => JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = false })
+            };
+
+            var chunks = SplitText(text).ToArray();
+            result[i] = chunks;
+
+            if (chunks.Length > maxChunks)
+                maxChunks = chunks.Length;
+        }
+
+        return result;
+    }
+
+    private static IEnumerable<ReadOnlyMemory<char>> SplitText(string text)
+    {
+        for (int i = 0; i < text.Length; i += XmlConstants.MaxCellTextLength)
+        {
+            int len = Math.Min(XmlConstants.MaxCellTextLength, text.Length - i);
+            yield return text.AsMemory(i, len);
         }
     }
 
-    private static void WriteCellInline(OpenXmlWriter writer, int columnIndex, uint rowIndex, string text)
+    private static void WriteCell(
+        OpenXmlWriter writer,
+        int columnIndex,
+        uint rowIndex,
+        ReadOnlySpan<char> text)
     {
         writer.WriteStartElement(new Cell
         {
@@ -132,13 +151,34 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
         });
 
         writer.WriteStartElement(new InlineString());
-        writer.WriteElement(new Text(text) { Space = SpaceProcessingModeValues.Preserve });
-        writer.WriteEndElement(); // InlineString
+        writer.WriteStartElement(new Text { Space = SpaceProcessingModeValues.Preserve });
 
+        for (int i = 0; i < text.Length; i += XmlConstants.TextChunkSize)
+        {
+            int len = Math.Min(XmlConstants.TextChunkSize, text.Length - i);
+            writer.WriteString(new string(text.Slice(i, len)));
+        }
+
+        writer.WriteEndElement(); // Text
+        writer.WriteEndElement(); // InlineString
         writer.WriteEndElement(); // Cell
     }
 
-    private static WorksheetPart CreateWorksheetPart(WorkbookPart workbookPart, Sheets sheets, uint sheetId)
+    private static long EstimateRowSize(ReadOnlyMemory<char>[][] chunks)
+    {
+        long size = 64;
+
+        foreach (var col in chunks)
+            foreach (var chunk in col)
+                size += 128 + chunk.Length;
+
+        return size;
+    }
+
+    private static WorksheetPart CreateWorksheetPart(
+        WorkbookPart workbookPart,
+        Sheets sheets,
+        uint sheetId)
     {
         var worksheetPart = workbookPart.AddNewPart<WorksheetPart>();
 
@@ -160,7 +200,7 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
         return writer;
     }
 
-    private static void CloseSheet(OpenXmlWriter writer)
+    private static void CloseSheet(OpenXmlWriter writer, WorksheetPart worksheetPart)
     {
         writer.WriteEndElement(); // SheetData
         writer.WriteEndElement(); // Worksheet
@@ -172,31 +212,16 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
         writer.WriteStartElement(new Row { RowIndex = 1 });
 
         for (int i = 0; i < columns.Count; i++)
-            WriteCellInline(writer, i + 1, 1, columns[i].Header ?? string.Empty);
+            WriteCell(writer, i + 1, 1, (columns[i].Header ?? "").AsSpan());
 
-        writer.WriteEndElement(); // Row
-    }
-
-    private static string GetColumnName(int columnIndex)
-    {
-        const string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        string result = "";
-
-        while (columnIndex > 0)
-        {
-            int rem = (columnIndex - 1) % 26;
-            result = letters[rem] + result;
-            columnIndex = (columnIndex - 1) / 26;
-        }
-
-        return result;
+        writer.WriteEndElement();
     }
 
     private static Func<object, object?>[] GetAccessors<T>(IReadOnlyList<ExcelColumn> columns)
     {
         var key = (typeof(T), string.Join("|", columns.Select(c => c.Name)));
 
-        return _propertyAccessors.GetOrAdd(key, _ =>
+        return _accessors.GetOrAdd(key, _ =>
         {
             var props = typeof(T)
                 .GetProperties(BindingFlags.Public | BindingFlags.Instance)
@@ -208,5 +233,17 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
                     : static _ => null
             ).ToArray();
         });
+    }
+
+    private static string GetColumnName(int columnIndex)
+    {
+        string result = "";
+        while (columnIndex > 0)
+        {
+            columnIndex--;
+            result = (char)('A' + columnIndex % 26) + result;
+            columnIndex /= 26;
+        }
+        return result;
     }
 }

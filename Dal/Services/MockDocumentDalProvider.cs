@@ -21,13 +21,11 @@ public sealed class MockDocumentDalProvider : IDocumentProvider, IDisposable
         "Payment", "Receipt", "Statement", "Certificate", "License"
     };
 
-    // Более реалистичное распределение размеров
-    // 70% - маленькие (<10KB), 25% - средние (10-100KB), 5% - большие (>100KB)
     private readonly (int Min, int Max, double Probability)[] _sizeDistribution = new[]
     {
-        (100, 10_000, 0.40),    // Маленькие
-        (10_001, 100_000, 0.45), // Средние
-        (100_001, 1_000_000, 0.15) // Большие
+        (1_000, 40_000, 0.50),
+        (40_001, 800_000, 0.30),
+        (800_001, 1_000_000, 0.20)
     };
 
     public MockDocumentDalProvider(int documentCount = 1000, int randomSeed = 123456789)
@@ -47,42 +45,90 @@ public sealed class MockDocumentDalProvider : IDocumentProvider, IDisposable
         {
             ct.ThrowIfCancellationRequested();
 
-            // Создаем документ с различной структурой
-            var jsonObject = GenerateRealisticJson(i);
-
-            // Сериализуем для проверки размера
-            var jsonString = jsonObject.ToJsonString();
-            var currentSize = Encoding.UTF8.GetByteCount(jsonString);
+            var targetSize = GetTargetSize();
+            var jsonObject = GenerateJsonOfExactSize(targetSize, i);
 
             yield return new DocumentDtoModel
             {
                 Id = Guid.NewGuid(),
                 DocumentSchemaId = Guid.NewGuid(),
                 Published = DateTime.UtcNow.AddDays(-_random.Next(0, 365)),
-                Version = Math.Round(1.0 + _random.NextDouble() * 9, 1), // Версии 1.0-10.0
-                IsArchived = _random.NextDouble() < 0.1, // 10% архивных
+                Version = Math.Round(1.0 + _random.NextDouble() * 9, 1),
+                IsArchived = _random.NextDouble() < 0.1,
                 JsonData = jsonObject,
-                IsCanForValidate = _random.NextDouble() < 0.8, // 80% можно валидировать
-                ChangedDateUtc = DateTime.UtcNow.AddHours(-_random.Next(0, 720)) // До 30 дней назад
+                IsCanForValidate = _random.NextDouble() < 0.8,
+                ChangedDateUtc = DateTime.UtcNow.AddHours(-_random.Next(0, 720))
             };
 
             returned++;
             if (limit.HasValue && returned >= limit.Value)
                 yield break;
 
-            // Регулярно освобождаем поток для асинхронности
             if (i % 100 == 0)
                 await Task.Yield();
         }
     }
 
-    private JsonObject GenerateRealisticJson(int index)
+    private int GetTargetSize()
+    {
+        var r = _random.NextDouble();
+        double cumulative = 0;
+
+        foreach (var (min, max, probability) in _sizeDistribution)
+        {
+            cumulative += probability;
+            if (r <= cumulative)
+            {
+                return _random.Next(min, max + 1);
+            }
+        }
+
+        return _random.Next(1_000, 1_000_001);
+    }
+
+    private JsonObject GenerateJsonOfExactSize(int targetSizeBytes, int index)
     {
         var docType = _documentTypes[_random.Next(_documentTypes.Count)];
-        var (minSize, maxSize, _) = GetRandomSizeCategory();
+        var obj = CreateBaseJsonObject(docType, index);
 
-        // Базовый объект
-        var obj = new JsonObject
+        // Получаем текущий размер
+        var currentJson = obj.ToJsonString();
+        var currentSize = Encoding.UTF8.GetByteCount(currentJson);
+
+        // Добавляем данные пока не достигнем нужного размера
+        if (currentSize < targetSizeBytes)
+        {
+            AddPaddingData(obj, targetSizeBytes - currentSize);
+        }
+        else if (currentSize > targetSizeBytes)
+        {
+            // Если перебор, создаем новый меньший объект
+            obj = CreateMinimalJsonObject(docType, index);
+            currentJson = obj.ToJsonString();
+            currentSize = Encoding.UTF8.GetByteCount(currentJson);
+
+            if (currentSize < targetSizeBytes)
+            {
+                AddPaddingData(obj, targetSizeBytes - currentSize);
+            }
+        }
+
+        // Финальная проверка
+        var finalJson = obj.ToJsonString();
+        var finalSize = Encoding.UTF8.GetByteCount(finalJson);
+
+        // Если все еще не совпадает, добавляем/убираем padding
+        if (finalSize != targetSizeBytes)
+        {
+            AdjustJsonSize(obj, targetSizeBytes, finalSize);
+        }
+
+        return obj;
+    }
+
+    private JsonObject CreateBaseJsonObject(string docType, int index)
+    {
+        return new JsonObject
         {
             ["documentId"] = Guid.NewGuid().ToString(),
             ["type"] = docType,
@@ -90,155 +136,104 @@ public sealed class MockDocumentDalProvider : IDocumentProvider, IDisposable
             ["createdAt"] = DateTime.UtcNow.ToString("O"),
             ["status"] = _random.NextDouble() < 0.8 ? "Active" : "Archived"
         };
+    }
 
-        // Добавляем различные поля в зависимости от типа
-        switch (docType)
-        {
-            case "Invoice":
-                AddInvoiceData(obj);
-                break;
-            case "Contract":
-                AddContractData(obj);
-                break;
-            case "Report":
-                AddReportData(obj);
-                break;
-            default:
-                AddGenericData(obj);
-                break;
-        }
-
-        // Добавляем дополнительные поля для увеличения размера (если нужно)
-        var currentJson = obj.ToJsonString();
-        var currentSize = Encoding.UTF8.GetByteCount(currentJson);
-
-        if (currentSize < minSize)
-        {
-            AddAdditionalData(obj, minSize - currentSize);
-        }
-
+    private JsonObject CreateMinimalJsonObject(string docType, int index)
+    {
+        var obj = CreateBaseJsonObject(docType, index);
+        obj["data"] = "minimal";
         return obj;
     }
 
-    private void AddInvoiceData(JsonObject obj)
+    private void AddPaddingData(JsonObject obj, int bytesNeeded)
     {
-        obj["totalAmount"] = Math.Round(_random.NextDouble() * 10000, 2);
-        obj["currency"] = _random.NextDouble() < 0.7 ? "RUB" : "USD";
-        obj["vendor"] = $"Vendor_{_random.Next(1000)}";
+        if (bytesNeeded <= 0) return;
 
-        var items = new JsonArray();
-        int itemCount = _random.Next(1, 50);
+        // Создаем строку нужного размера
+        var paddingKey = $"padding_{Guid.NewGuid():N}";
 
-        for (int i = 0; i < itemCount; i++)
+        // Рассчитываем размер ключа и кавычек
+        var keySize = Encoding.UTF8.GetByteCount($"\"{paddingKey}\":\"");
+        var closingSize = Encoding.UTF8.GetByteCount("\"");
+        var commaSize = obj.Count > 0 ? 1 : 0; // запятая между элементами
+
+        var valueSize = bytesNeeded - keySize - closingSize - commaSize;
+
+        if (valueSize <= 0)
         {
-            items.Add(new JsonObject
+            // Если места мало, просто добавляем маленькое значение
+            obj[paddingKey] = "x";
+            return;
+        }
+
+        // Создаем строку точно нужного размера
+        var paddingValue = GeneratePaddingString(valueSize);
+        obj[paddingKey] = paddingValue;
+    }
+
+    private string GeneratePaddingString(int exactByteSize)
+    {
+        // Используем ASCII символы для точного контроля размера
+        const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        var builder = new StringBuilder(exactByteSize);
+
+        // Заполняем предсказуемыми данными
+        for (int i = 0; i < exactByteSize; i++)
+        {
+            builder.Append(chars[i % chars.Length]);
+        }
+
+        return builder.ToString();
+    }
+
+    private void AdjustJsonSize(JsonObject obj, int targetSize, int currentSize)
+    {
+        var json = obj.ToJsonString();
+        var difference = targetSize - currentSize;
+
+        if (difference == 0) return;
+
+        if (difference > 0)
+        {
+            // Нужно добавить байты
+            var paddingKey = $"size_adjust_{Math.Abs(difference)}";
+
+            // Учитываем размер нового поля
+            var keyPart = $"\"{paddingKey}\":\"";
+            var keySize = Encoding.UTF8.GetByteCount(keyPart);
+            var closingSize = Encoding.UTF8.GetByteCount("\"");
+            var commaSize = 1;
+
+            var availableForValue = difference - keySize - closingSize - commaSize;
+
+            if (availableForValue > 0)
             {
-                ["product"] = $"Product_{_random.Next(1000)}",
-                ["quantity"] = _random.Next(1, 100),
-                ["price"] = Math.Round(_random.NextDouble() * 100, 2),
-                ["total"] = Math.Round(_random.NextDouble() * 1000, 2)
-            });
-        }
-
-        obj["items"] = items;
-    }
-
-    private void AddContractData(JsonObject obj)
-    {
-        obj["startDate"] = DateTime.UtcNow.ToString("O");
-        obj["endDate"] = DateTime.UtcNow.AddDays(_random.Next(30, 365)).ToString("O");
-        obj["parties"] = new JsonArray
-        {
-            new JsonObject { ["name"] = $"Party_A_{_random.Next(100)}", ["role"] = "Supplier" },
-            new JsonObject { ["name"] = $"Party_B_{_random.Next(100)}", ["role"] = "Client" }
-        };
-
-        // Длинное текстовое поле
-        var clauses = new StringBuilder();
-        int clauseCount = _random.Next(5, 50);
-        for (int i = 0; i < clauseCount; i++)
-        {
-            clauses.AppendLine($"Clause {i + 1}: Lorem ipsum dolor sit amet, consectetur adipiscing elit. ");
-        }
-        obj["terms"] = clauses.ToString();
-    }
-
-    private void AddReportData(JsonObject obj)
-    {
-        obj["period"] = $"{DateTime.UtcNow:yyyy-MM}";
-        obj["generatedBy"] = $"User_{_random.Next(100)}";
-
-        var metrics = new JsonObject();
-        for (int i = 0; i < _random.Next(10, 100); i++)
-        {
-            metrics[$"metric_{i}"] = Math.Round(_random.NextDouble() * 1000, 2);
-        }
-        obj["metrics"] = metrics;
-    }
-
-    private void AddGenericData(JsonObject obj)
-    {
-        obj["description"] = $"Generic document {Guid.NewGuid()}";
-
-        var metadata = new JsonObject();
-        int metaCount = _random.Next(5, 20);
-        for (int i = 0; i < metaCount; i++)
-        {
-            metadata[$"field_{i}"] = $"value_{_random.Next(1000)}";
-        }
-        obj["metadata"] = metadata;
-    }
-
-    private void AddAdditionalData(JsonObject obj, int additionalBytesNeeded)
-    {
-        if (additionalBytesNeeded <= 0) return;
-
-        // Добавляем большое текстовое поле
-        var largeField = new StringBuilder();
-        int approxCharsNeeded = additionalBytesNeeded / 2; // Примерно 2 байта на символ UTF-8
-
-        while (largeField.Length < approxCharsNeeded)
-        {
-            largeField.Append("Sample text for padding. ");
-        }
-
-        obj["additionalData"] = largeField.ToString();
-
-        // Или добавляем массив
-        if (_random.NextDouble() < 0.5)
-        {
-            var array = new JsonArray();
-            int itemsNeeded = additionalBytesNeeded / 100; // ~100 байт на элемент
-
-            for (int i = 0; i < itemsNeeded; i++)
-            {
-                array.Add(new JsonObject
-                {
-                    ["id"] = Guid.NewGuid().ToString(),
-                    ["value"] = _random.NextDouble(),
-                    ["timestamp"] = DateTime.UtcNow.ToString("O")
-                });
+                obj[paddingKey] = new string('x', availableForValue);
             }
-
-            obj["extraItems"] = array;
-        }
-    }
-
-    private (int Min, int Max, double Probability) GetRandomSizeCategory()
-    {
-        var r = _random.NextDouble();
-        double cumulative = 0;
-
-        foreach (var category in _sizeDistribution)
-        {
-            cumulative += category.Probability;
-            if (r <= cumulative)
+            else
             {
-                return category;
+                // Если места совсем мало, добавляем в существующее поле
+                var existingKey = obj.First().Key;
+                var existingValue = obj[existingKey]?.ToString() ?? "";
+                obj[existingKey] = existingValue + new string('x', difference);
             }
         }
+        else
+        {
+            // Нужно убрать байты (difference отрицательное)
+            difference = Math.Abs(difference);
+            var lastKey = obj.Last().Key;
+            var lastValue = obj[lastKey]?.ToString() ?? "";
 
-        return _sizeDistribution[0];
+            if (lastValue.Length > difference)
+            {
+                obj[lastKey] = lastValue.Substring(0, lastValue.Length - difference);
+            }
+            else
+            {
+                obj.Remove(lastKey);
+            }
+        }
     }
 
     public void Dispose()
