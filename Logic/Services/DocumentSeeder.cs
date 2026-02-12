@@ -68,7 +68,7 @@ namespace Analitics6400.Logic.Seed
                 if (i > 0)
                     sqlBuilder.Append(", ");
 
-                var jsonSizeKb = _random.Next(100, 1024);
+                var jsonSizeKb = _random.Next(512, 1024);
                 var jsonData = GenerateJsonPayloadOptimized(jsonTemplate, jsonSizeKb * 1024, paramIndex);
 
                 sqlBuilder.Append(

@@ -58,11 +58,15 @@ public class Programm
         builder.Services.AddTransient<IXmlWriter, AbankingCsvWriter>();
         builder.Services.AddTransient<IXmlWriter, AbankingOpenXmlWriter>();
         builder.Services.AddTransient<IXmlWriter, AbankingClosedXmlWriter>();
+        builder.Services.AddTransient<IXmlWriter, AbankingXmlWriter>();
+        builder.Services.AddTransient<IXmlWriter, AbankingMiniExcelWriter>();
 
         // Выбираем нужный:
-        builder.Services.AddTransient<IXmlTest, XmlTest<AbankingOpenXmlWriter>>();
+        //builder.Services.AddTransient<IXmlTest, XmlTest<AbankingOpenXmlWriter>>();
+        //builder.Services.AddTransient<IXmlTest, XmlTest<AbankingXmlWriter>>();
         //builder.Services.AddTransient<IXmlTest, XmlTest<AbankingClosedXmlWriter>>();
         //builder.Services.AddTransient<IXmlTest, XmlTest<AbankingCsvWriter>>(); // Полностю рабочий и корректный
+        builder.Services.AddTransient<IXmlTest, XmlTest<AbankingMiniExcelWriter>>();
     }
 
     private static void SetSettings(WebApplicationBuilder builder)

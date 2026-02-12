@@ -9,6 +9,6 @@ public interface IXmlWriter
     Task GenerateAsync<T>(
          IAsyncEnumerable<T> rows,
          IReadOnlyList<ExcelColumn> columns,
-         Stream output,
+         string output,
          CancellationToken ct = default);
 }

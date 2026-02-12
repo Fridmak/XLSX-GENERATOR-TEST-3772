@@ -4,6 +4,7 @@ using Analitics6400.Logic.Services.XmlWriters.Interfaces;
 using Analitics6400.Logic.Services.XmlWriters.Models;
 using Analitics6400.Logic.Test.Interfaces;
 using DocumentFormat.OpenXml.Spreadsheet;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.Diagnostics;
 using System.Text.Json;
@@ -84,7 +85,7 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
             var rows = _documentProvider.GetDocumentsAsync(_settings.DocumentsLimit, ct);
 
             var fileName = $"DocumentsReport_{DateTime.UtcNow:yyyyMMdd_HHmmss}.{_writer.Extension}";
-            await using var fs = new FileStream(fileName, FileMode.Create, FileAccess.ReadWrite, FileShare.None, bufferSize: 1024 * 1024);
+            await using var fs = new FileStream(fileName, FileMode.Create, FileAccess.ReadWrite, FileShare.None, bufferSize:  64 * 1024);
 
             _logger.LogInformation($"Вызов генератора {_writer.ToString()} для {nameof(fileName)}: {fileName}");
 
@@ -144,7 +145,14 @@ public sealed class XmlTest<T> : IXmlTest where T : IXmlWriter
                 }
             }
 
-            await _writer.GenerateAsync(rows, columns, fs, ct);
+            await _writer.GenerateAsync(CountRows(rows), columns, fs, ct);
+
+            _logger.LogWarning(Process.GetCurrentProcess().WorkingSet64.ToString());
+
+            _logger.LogWarning(GC.GetTotalMemory(false).ToString());
+
+            _logger.LogWarning(GC.GetTotalMemory(true).ToString());
+
 
             stopwatch.Stop();
             _logger.LogInformation($"Файл сгенерирован: {fileName}");

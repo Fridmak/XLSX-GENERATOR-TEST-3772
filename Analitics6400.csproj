@@ -8,8 +8,11 @@
 
 	<ItemGroup>
 	  <PackageReference Include="ClosedXML" Version="0.105.0" />
+	  <PackageReference Include="FastMember" Version="1.5.0" />
 	  <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.2" />
+	  <PackageReference Include="MiniExcel" Version="1.42.0" />
 	  <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="8.0.2" />
+	  <PackageReference Include="Sylvan.Data.Excel" Version="0.5.2" />
 	</ItemGroup>
 
 </Project>

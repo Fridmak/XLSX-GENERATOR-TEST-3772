@@ -1,20 +1,20 @@
 ﻿using Analitics6400.Dal.Services.Interfaces;
 using Analitics6400.Logic.Models;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
-using System.Text;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Analitics6400.Dal.Services;
 
-/// <summary>
-/// Реалистичный мок-провайдер документов для тестов генерации Excel.
-/// Генерирует документы с разными размерами и структурами.
-/// </summary>
 public sealed class MockDocumentDalProvider : IDocumentProvider, IDisposable
 {
     private readonly int _documentCount;
     private readonly Random _random;
+
+    // Use a static cache to share memory across all instances of the provider
+    // This ensures that even if you create multiple providers, they share the heavy string payloads.
+    private static readonly ConcurrentDictionary<int, string> _paddingCache = new();
+
     private readonly List<string> _documentTypes = new()
     {
         "Invoice", "Contract", "Report", "Application", "Order",
@@ -23,9 +23,9 @@ public sealed class MockDocumentDalProvider : IDocumentProvider, IDisposable
 
     private readonly (int Min, int Max, double Probability)[] _sizeDistribution = new[]
     {
-        (1_000, 40_000, 0.50),
-        (40_001, 800_000, 0.30),
-        (800_001, 1_000_000, 0.20)
+        (1_000, 40_000, 0.10),
+        (40_001, 200_000, 0.10),
+        (200_001, 1_000_000, 0.80)
     };
 
     public MockDocumentDalProvider(int documentCount = 1000, int randomSeed = 123456789)
@@ -64,6 +64,7 @@ public sealed class MockDocumentDalProvider : IDocumentProvider, IDisposable
             if (limit.HasValue && returned >= limit.Value)
                 yield break;
 
+            // Yield occasionally to keep UI/Thread responsive, but not too often
             if (i % 100 == 0)
                 await Task.Yield();
         }
@@ -79,11 +80,16 @@ public sealed class MockDocumentDalProvider : IDocumentProvider, IDisposable
             cumulative += probability;
             if (r <= cumulative)
             {
-                return _random.Next(min, max + 1);
+                // QUANTIZATION FIX:
+                // Round the size to the nearest 1024 bytes (1KB).
+                // This drastically increases the hit rate of our _paddingCache.
+                // Instead of 1,000,000 unique string sizes, we have ~1000 unique sizes.
+                var size = _random.Next(min, max + 1);
+                return (int)Math.Ceiling(size / 1024.0) * 1024;
             }
         }
 
-        return _random.Next(1_000, 1_000_001);
+        return 1_000_000; // Fallback max size
     }
 
     private JsonObject GenerateJsonOfExactSize(int targetSizeBytes, int index)
@@ -91,36 +97,29 @@ public sealed class MockDocumentDalProvider : IDocumentProvider, IDisposable
         var docType = _documentTypes[_random.Next(_documentTypes.Count)];
         var obj = CreateBaseJsonObject(docType, index);
 
-        // Получаем текущий размер
-        var currentJson = obj.ToJsonString();
-        var currentSize = Encoding.UTF8.GetByteCount(currentJson);
+        var paddingKey = "payload"; // Keeping key constant saves a tiny bit more memory, but optional.
 
-        // Добавляем данные пока не достигнем нужного размера
-        if (currentSize < targetSizeBytes)
+        // Estimate base size (approx 200 bytes)
+        var estimatedCurrentSize = 200;
+        var bytesNeeded = targetSizeBytes - estimatedCurrentSize;
+
+        if (bytesNeeded > 50)
         {
-            AddPaddingData(obj, targetSizeBytes - currentSize);
+            // MEMORY FIX:
+            // Instead of 'new string(...)', we get a reference to an existing string from cache.
+            // 1000 documents will now point to the SAME string instance in memory.
+            // This reduces RAM usage for the payload by factor of ~N (where N is reuse count).
+
+            // Adjust bytesNeeded to match our quantization step to ensure cache hit
+            var quantizedSize = (int)Math.Ceiling(bytesNeeded / 1024.0) * 1024;
+
+            var padding = _paddingCache.GetOrAdd(quantizedSize, size => new string('x', size));
+
+            obj[paddingKey] = padding;
         }
-        else if (currentSize > targetSizeBytes)
+        else
         {
-            // Если перебор, создаем новый меньший объект
-            obj = CreateMinimalJsonObject(docType, index);
-            currentJson = obj.ToJsonString();
-            currentSize = Encoding.UTF8.GetByteCount(currentJson);
-
-            if (currentSize < targetSizeBytes)
-            {
-                AddPaddingData(obj, targetSizeBytes - currentSize);
-            }
-        }
-
-        // Финальная проверка
-        var finalJson = obj.ToJsonString();
-        var finalSize = Encoding.UTF8.GetByteCount(finalJson);
-
-        // Если все еще не совпадает, добавляем/убираем padding
-        if (finalSize != targetSizeBytes)
-        {
-            AdjustJsonSize(obj, targetSizeBytes, finalSize);
+            obj["data"] = "x";
         }
 
         return obj;
@@ -138,106 +137,9 @@ public sealed class MockDocumentDalProvider : IDocumentProvider, IDisposable
         };
     }
 
-    private JsonObject CreateMinimalJsonObject(string docType, int index)
-    {
-        var obj = CreateBaseJsonObject(docType, index);
-        obj["data"] = "minimal";
-        return obj;
-    }
-
-    private void AddPaddingData(JsonObject obj, int bytesNeeded)
-    {
-        if (bytesNeeded <= 0) return;
-
-        // Создаем строку нужного размера
-        var paddingKey = $"padding_{Guid.NewGuid():N}";
-
-        // Рассчитываем размер ключа и кавычек
-        var keySize = Encoding.UTF8.GetByteCount($"\"{paddingKey}\":\"");
-        var closingSize = Encoding.UTF8.GetByteCount("\"");
-        var commaSize = obj.Count > 0 ? 1 : 0; // запятая между элементами
-
-        var valueSize = bytesNeeded - keySize - closingSize - commaSize;
-
-        if (valueSize <= 0)
-        {
-            // Если места мало, просто добавляем маленькое значение
-            obj[paddingKey] = "x";
-            return;
-        }
-
-        // Создаем строку точно нужного размера
-        var paddingValue = GeneratePaddingString(valueSize);
-        obj[paddingKey] = paddingValue;
-    }
-
-    private string GeneratePaddingString(int exactByteSize)
-    {
-        // Используем ASCII символы для точного контроля размера
-        const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        var builder = new StringBuilder(exactByteSize);
-
-        // Заполняем предсказуемыми данными
-        for (int i = 0; i < exactByteSize; i++)
-        {
-            builder.Append(chars[i % chars.Length]);
-        }
-
-        return builder.ToString();
-    }
-
-    private void AdjustJsonSize(JsonObject obj, int targetSize, int currentSize)
-    {
-        var json = obj.ToJsonString();
-        var difference = targetSize - currentSize;
-
-        if (difference == 0) return;
-
-        if (difference > 0)
-        {
-            // Нужно добавить байты
-            var paddingKey = $"size_adjust_{Math.Abs(difference)}";
-
-            // Учитываем размер нового поля
-            var keyPart = $"\"{paddingKey}\":\"";
-            var keySize = Encoding.UTF8.GetByteCount(keyPart);
-            var closingSize = Encoding.UTF8.GetByteCount("\"");
-            var commaSize = 1;
-
-            var availableForValue = difference - keySize - closingSize - commaSize;
-
-            if (availableForValue > 0)
-            {
-                obj[paddingKey] = new string('x', availableForValue);
-            }
-            else
-            {
-                // Если места совсем мало, добавляем в существующее поле
-                var existingKey = obj.First().Key;
-                var existingValue = obj[existingKey]?.ToString() ?? "";
-                obj[existingKey] = existingValue + new string('x', difference);
-            }
-        }
-        else
-        {
-            // Нужно убрать байты (difference отрицательное)
-            difference = Math.Abs(difference);
-            var lastKey = obj.Last().Key;
-            var lastValue = obj[lastKey]?.ToString() ?? "";
-
-            if (lastValue.Length > difference)
-            {
-                obj[lastKey] = lastValue.Substring(0, lastValue.Length - difference);
-            }
-            else
-            {
-                obj.Remove(lastKey);
-            }
-        }
-    }
-
     public void Dispose()
     {
-        // Нет неуправляемых ресурсов
+        // Cache is static, so we don't clear it here to benefit other instances.
+        // If you strictly want to clear it, remove 'static' from the dictionary definition.
     }
 }

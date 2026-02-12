@@ -4,10 +4,11 @@ using Analitics6400.Logic.Services.XmlWriters.Models;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Spreadsheet;
-using Microsoft.Extensions.Logging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.Json;
+using Text = DocumentFormat.OpenXml.Spreadsheet.Text;
 
 namespace Analitics6400.Logic.Services.XmlWriters;
 
@@ -31,8 +32,7 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
     {
         using var document = SpreadsheetDocument.Create(
             output,
-            SpreadsheetDocumentType.Workbook,
-            autoSave: true);
+            SpreadsheetDocumentType.Workbook);
 
         var workbookPart = document.AddWorkbookPart();
         workbookPart.Workbook = new Workbook();
@@ -42,7 +42,7 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
 
         uint sheetId = 1;
         uint rowIndex = 1;
-        long sheetSize = 0; // нужен для предотвращения ошибки Stream was too long при переносе в zip xml документа
+        long sheetBytes = 0; // нужен для предотвращения ошибки Stream was too long при переносе в zip xml документа
 
         var worksheetPart = CreateWorksheetPart(workbookPart, sheets, sheetId);
         var writer = CreateSheetWriter(worksheetPart);
@@ -52,61 +52,50 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
 
         await foreach (var row in rows.WithCancellation(ct))
         {
-            var split = SplitRow(row, accessors, columns, out int maxChunks);
-            long estimated = EstimateRowSize(split);
+            // 1. Получаем строки ячеек (БЕЗ чанков)
+            var values = GetRowValues(row, accessors, columns, out int maxChunks);
 
-            if (sheetSize + estimated > XmlConstants.MaxSheetBytes ||
-                rowIndex + maxChunks > XmlConstants.ExcelMaxRows)
+            // 2. Проверка лимитов
+            if (rowIndex + maxChunks > XmlConstants.ExcelMaxRows)
             {
                 CloseSheet(writer, worksheetPart);
-
-                sheetId++;
-                rowIndex = 1;
-                sheetSize = 0;
-
-                worksheetPart = CreateWorksheetPart(workbookPart, sheets, sheetId);
-                writer = CreateSheetWriter(worksheetPart);
-                WriteHeader(writer, columns);
-                rowIndex = 2;
+                return;
             }
 
+            // 3. Пишем строки
             for (int chunk = 0; chunk < maxChunks; chunk++)
             {
                 writer.WriteStartElement(new Row { RowIndex = rowIndex });
 
                 for (int c = 0; c < columns.Count; c++)
                 {
-                    var text = chunk < split[c].Length
-                        ? split[c][chunk]
-                        : ReadOnlyMemory<char>.Empty;
-
-                    WriteCell(writer, c + 1, rowIndex, text.Span);
+                    WriteCellChunk(
+                        writer,
+                        values[c],
+                        chunk);
                 }
 
                 writer.WriteEndElement(); // Row
                 rowIndex++;
             }
 
-            sheetSize += estimated;
-
-            if (rowIndex % 1000 == 0)
-            {
+            if (rowIndex % 10000 == 0)
                 await Task.Yield();
-            }
         }
+
 
         CloseSheet(writer, worksheetPart);
     }
 
     // ---------------- helpers ----------------
 
-    private static ReadOnlyMemory<char>[][] SplitRow<T>(
+    private static string[] GetRowValues<T>(
         T row,
         Func<object, object?>[] accessors,
         IReadOnlyList<ExcelColumn> columns,
         out int maxChunks)
     {
-        var result = new ReadOnlyMemory<char>[columns.Count][];
+        var result = new string[columns.Count];
         maxChunks = 1;
 
         for (int i = 0; i < columns.Count; i++)
@@ -119,23 +108,54 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
                 _ => JsonSerializer.Serialize(value, new JsonSerializerOptions { WriteIndented = false })
             };
 
-            var chunks = SplitText(text).ToArray();
-            result[i] = chunks;
+            result[i] = text;
 
-            if (chunks.Length > maxChunks)
-                maxChunks = chunks.Length;
+            int chunks = (text.Length + XmlConstants.MaxCellTextLength - 1)
+                         / XmlConstants.MaxCellTextLength;
+
+            if (chunks > maxChunks)
+                maxChunks = chunks;
         }
 
         return result;
     }
 
-    private static IEnumerable<ReadOnlyMemory<char>> SplitText(string text)
+    private static void WriteCellChunk(
+        OpenXmlWriter writer,
+        string text,
+        int chunkIndex)
     {
-        for (int i = 0; i < text.Length; i += XmlConstants.MaxCellTextLength)
+        int max = XmlConstants.MaxCellTextLength;
+        int offset = chunkIndex * max;
+
+        if (offset >= text.Length)
         {
-            int len = Math.Min(XmlConstants.MaxCellTextLength, text.Length - i);
-            yield return text.AsMemory(i, len);
+            writer.WriteStartElement(new Cell());
+            writer.WriteEndElement();
+            return;
         }
+
+        int len = Math.Min(max, text.Length - offset);
+
+        writer.WriteStartElement(new Cell
+        {
+            DataType = CellValues.InlineString
+        });
+
+        writer.WriteStartElement(new InlineString());
+        writer.WriteStartElement(new Text());
+
+        const int subChunk = 4096; // 🔑 ключевая строка
+        for (int i = 0; i < len; i += subChunk)
+        {
+            int partLen = Math.Min(subChunk, len - i);
+            writer.WriteString(text.AsSpan(offset + i, partLen).ToString());
+        }
+        //writer.WriteString(text);
+
+        writer.WriteEndElement(); // Text
+        writer.WriteEndElement(); // InlineString
+        writer.WriteEndElement(); // Cell
     }
 
     private static void WriteCell(
@@ -146,33 +166,17 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
     {
         writer.WriteStartElement(new Cell
         {
-            CellReference = GetColumnName(columnIndex) + rowIndex,
             DataType = CellValues.InlineString
         });
 
         writer.WriteStartElement(new InlineString());
         writer.WriteStartElement(new Text { Space = SpaceProcessingModeValues.Preserve });
 
-        for (int i = 0; i < text.Length; i += XmlConstants.TextChunkSize)
-        {
-            int len = Math.Min(XmlConstants.TextChunkSize, text.Length - i);
-            writer.WriteString(new string(text.Slice(i, len)));
-        }
+        writer.WriteString(text.ToString());
 
         writer.WriteEndElement(); // Text
         writer.WriteEndElement(); // InlineString
         writer.WriteEndElement(); // Cell
-    }
-
-    private static long EstimateRowSize(ReadOnlyMemory<char>[][] chunks)
-    {
-        long size = 64;
-
-        foreach (var col in chunks)
-            foreach (var chunk in col)
-                size += 128 + chunk.Length;
-
-        return size;
     }
 
     private static WorksheetPart CreateWorksheetPart(
@@ -234,16 +238,5 @@ public sealed class AbankingOpenXmlWriter : IXmlWriter
             ).ToArray();
         });
     }
-
-    private static string GetColumnName(int columnIndex)
-    {
-        string result = "";
-        while (columnIndex > 0)
-        {
-            columnIndex--;
-            result = (char)('A' + columnIndex % 26) + result;
-            columnIndex /= 26;
-        }
-        return result;
-    }
 }
+
