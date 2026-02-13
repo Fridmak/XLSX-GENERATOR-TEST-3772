@@ -3,6 +3,7 @@ using Analitics6400.Logic.Services.XmlWriters.Interfaces;
 using Analitics6400.Logic.Services.XmlWriters.Models;
 using MiniExcelLibs;
 using MiniExcelLibs.OpenXml;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -14,168 +15,269 @@ public sealed class AbankingMiniExcelWriter : IXmlWriter
 {
     private static readonly ConcurrentDictionary<(Type, string), Func<object, object?>[]> _accessors = new();
 
+    private const int SharedStringCacheBytes = 5 * 1024 * 1024; // 5MB
+    private const int OptimalBufferSize = 512 * 1024;           // 512KB
+
     public string Extension => "xlsx";
 
     public async Task GenerateAsync<T>(
         IAsyncEnumerable<T> rows,
         IReadOnlyList<ExcelColumn> columns,
-        string output,
-        CancellationToken ct = default)
+        Stream output,
+        string? baseSheetName = null,
+        CancellationToken ct = default,
+        bool useTemplate = false,
+        Stream? templateStream = null)
     {
+        if (output == null)
+        {
+            throw new ArgumentNullException(nameof(output));
+        }
+        if (!output.CanSeek)
+        {
+            throw new InvalidOperationException("Output stream must support seeking.");
+        }
+        if (columns == null || columns.Count == 0)
+        {
+            throw new ArgumentException("Columns are required.", nameof(columns));
+        }
+
+        if (useTemplate && templateStream != null)
+        {
+            await GenerateFromTemplateAsync(rows, columns, output, templateStream, baseSheetName, ct).ConfigureAwait(false);
+            return;
+        }
+
         var accessors = GetAccessors<T>(columns);
+        var headers = columns.Select(c => c.Header ?? c.Name).ToArray();
 
         var config = new OpenXmlConfiguration
         {
-            FastMode = true,
-            AutoFilter = false,
+            FastMode = false,
             TableStyles = TableStyles.None,
+            AutoFilter = false,
             EnableSharedStringCache = true,
-            SharedStringCacheSize = 50 * 1024 * 1024,
+            SharedStringCacheSize = SharedStringCacheBytes,
             IgnoreEmptyRows = true,
             EnableWriteNullValueCell = true,
-            WriteEmptyStringAsNull = false
+            WriteEmptyStringAsNull = false,
+            EnableAutoWidth = false,
+            BufferSize = OptimalBufferSize
         };
 
-        // MiniExcel работает с IEnumerable, конвертируем IAsyncEnumerable в IEnumerable батчами
-        var ind = 0;
-        var lastSheetName = $"Sheet{ind}";
-        await foreach (var (batch, sheetName) in GetBatches(rows, columns, accessors, ct))
+        var physicalRows = ConvertToStreamingRowsAsync(rows, headers, accessors, ct);
+
+        await MiniExcel.SaveAsAsync(
+            output,
+            physicalRows,
+            printHeader: true,
+            sheetName: baseSheetName!,
+            excelType: ExcelType.XLSX,
+            configuration: config,
+            cancellationToken: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// ЖРЕТ ПАМЯТЬ! Использовать только для небольших наборов данных, которые гарантированно поместятся в память.
+    /// Применяет данные к шаблону Excel (заполняет {{placeholders}} и коллекции {{collection.field}}).
+    /// Шаблон должен содержать заголовки и формулы; данные дописываются в соответствии с шаблоном.
+    /// </summary>
+    private async Task GenerateFromTemplateAsync<T>(
+        IAsyncEnumerable<T> rows,
+        IReadOnlyList<ExcelColumn> columns,
+        Stream output,
+        Stream templateStream,
+        string? baseSheetName,
+        CancellationToken ct)
+    {
+        // MiniExcel.SaveAsByTemplate требует материализованную коллекцию
+        var rowsList = new List<IDictionary<string, object?>>();
+        var accessors = GetAccessors<T>(columns);
+        var headers = columns.Select(c => c.Header ?? c.Name).ToArray();
+
+        await foreach (var item in rows.WithCancellation(ct).ConfigureAwait(false))
         {
+            var columnCount = headers.Length;
+            var values = ArrayPool<object?>.Shared.Rent(columnCount);
+
+            try
             {
-                // Первый батч - создаем файл
-                if (output.Position == 0)
+                for (int i = 0; i < columnCount; i++)
                 {
-                    await MiniExcel.SaveAsAsync(output, batch,
-                        printHeader: true,
-                        sheetName: sheetName,
-                        excelType: ExcelType.XLSX,
-                        configuration: config,
-                        cancellationToken: ct);
+                    var rawValue = accessors[i](item!);
+                    values[i] = NormalizeValue(rawValue);
                 }
-                else
+
+                foreach (var row in BuildChunkedRows(headers, values, ct))
                 {
-                    output.Seek(0, SeekOrigin.Begin);
-
-                    var isNewSheet = lastSheetName != sheetName;
-
-                    // Последующие батчи - добавляем
-                    await MiniExcel.InsertAsync(output, batch,
-                        sheetName: sheetName,
-                        excelType: ExcelType.XLSX,
-                        configuration: config,
-                        printHeader: isNewSheet,
-                        cancellationToken: ct);
+                    rowsList.Add(row);
                 }
-                ind++;
+            }
+            finally
+            {
+                ArrayPool<object?>.Shared.Return(values);
+            }
+        }
 
-                await Task.Yield();
+        var config = new OpenXmlConfiguration
+        {
+            IgnoreTemplateParameterMissing = true, // Игнорируем отсутствующие параметры в шаблоне
+            EnableSharedStringCache = true,
+            SharedStringCacheSize = SharedStringCacheBytes
+        };
+
+        templateStream.Seek(0, SeekOrigin.Begin);
+        byte[] templateBytes = new byte[templateStream.Length];
+        await templateStream.ReadAsync(templateBytes, 0, (int)templateStream.Length, ct).ConfigureAwait(false);
+
+        // MiniExcel.SaveAsByTemplate заполнит {{placeholders}} и {{collection.field}} в шаблоне
+        await MiniExcel.SaveAsByTemplateAsync(
+            output,
+            templateBytes,
+            new { Data = rowsList }, // Обёртываем в объект с именем "Data" для использования {{Data.ColumnName}}
+            configuration: config,
+            cancellationToken: ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Конвертация записей в физические строки Excel с нарезкой длинных текстов.
+    /// </summary>
+    private static async IAsyncEnumerable<IDictionary<string, object?>> ConvertToStreamingRowsAsync<T>(
+    IAsyncEnumerable<T> source,
+    string[] headers,
+    Func<object, object?>[] accessors,
+    [EnumeratorCancellation] CancellationToken ct)
+    {
+        await foreach (var item in source.WithCancellation(ct).ConfigureAwait(false))
+        {
+            var columnCount = headers.Length;
+            var values = ArrayPool<object?>.Shared.Rent(columnCount);
+
+            try
+            {
+                for (int i = 0; i < columnCount; i++)
+                {
+                    var rawValue = accessors[i](item!);
+                    values[i] = NormalizeValue(rawValue);
+                }
+
+                foreach (var row in BuildChunkedRows(headers, values, ct))
+                {
+                    yield return row;
+                }
+            }
+            finally
+            {
+                ArrayPool<object?>.Shared.Return(values);
             }
         }
     }
 
-    private async IAsyncEnumerable<(List<Dictionary<string, object>> Batch, string SheetName)> GetBatches<T>(
-        IAsyncEnumerable<T> rows,
-        IReadOnlyList<ExcelColumn> columns,
-        Func<object, object?>[] accessors,
-        [EnumeratorCancellation] CancellationToken ct)
+
+    /// <summary>
+    /// Строит физические строки Excel с нарезкой длинных текстов.
+    /// </summary>
+    private static IEnumerable<IDictionary<string, object?>> BuildChunkedRows(
+        string[] headers,
+        object?[] values,
+        CancellationToken ct)
     {
+        var columnCount = headers.Length;
 
-        var sheetIndex = 0; 
-        var batch = new List<Dictionary<string, object>>();
-        var headerNames = columns.Select(c => c.Header ?? c.Name).ToArray();
+        int maxChunks = 1;
 
-        await foreach (var row in rows.WithCancellation(ct))
+        for (int i = 0; i < columnCount; i++)
         {
-            // Получаем значения всех колонок
-            var columnValues = new string[columns.Count];
-            var columnChunks = new int[columns.Count];
-            var maxChunks = 1;
-            var stringsUsed = 1;
-
-            for (int i = 0; i < columns.Count; i++)
+            if (values[i] is string str && str.Length > 0)
             {
-                var value = accessors[i](row);
-                var text = value switch
+                var chunks = (str.Length + XmlConstants.MaxCellTextLength - 1) / XmlConstants.MaxCellTextLength;
+                if (chunks > maxChunks)
                 {
-                    null => string.Empty,
-                    string s => s,
-                    _ => JsonSerializer.Serialize(value, JsonSerializerOptions.Default)
-                };
-
-                columnValues[i] = text;
-                columnChunks[i] = (text.Length + XmlConstants.MaxCellTextLength - 1) / XmlConstants.MaxCellTextLength;
-
-                if (columnChunks[i] > maxChunks)
-                {
-                    maxChunks = columnChunks[i];
+                    maxChunks = chunks;
                 }
             }
+        }
 
-            // Генерируем строки
-            for (int chunk = 0; chunk < maxChunks; chunk++)
+        for (int chunk = 0; chunk < maxChunks; chunk++)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var row = new Dictionary<string, object?>(capacity: columnCount);
+            var isFirstChunk = chunk == 0;
+
+            for (int i = 0; i < columnCount; i++)
             {
-                var rowData = new Dictionary<string, object>();
+                var header = headers[i];
+                var value = values[i];
 
-                for (int i = 0; i < columns.Count; i++)
+                if (value is string s)
                 {
-                    var header = headerNames[i];
-                    var text = columnValues[i];
-
-                    if (chunk == 0)
+                    if (isFirstChunk)
                     {
-                        // Первая строка - все значения (обрезанные до 32К если нужно)
-                        rowData[header] = text.Length > XmlConstants.MaxCellTextLength
-                            ? text.Substring(0, XmlConstants.MaxCellTextLength)
-                            : text;
+                        var take = s.Length > XmlConstants.MaxCellTextLength ? XmlConstants.MaxCellTextLength : s.Length;
+                        var head = take == s.Length ? s : s.Substring(0, take);
+
+                        if (s.Length > XmlConstants.MaxCellTextLength)
+                        {
+                            head = head + XmlConstants.JsonOverflowNotice;
+                        }
+
+                        row[header] = head;
                     }
                     else
                     {
-                        // Для последующих строк - ТОЛЬКО если есть продолжение текста
-                        int offset = chunk * XmlConstants.MaxCellTextLength;
-                        if (offset < text.Length)
+                        var offset = chunk * XmlConstants.MaxCellTextLength;
+                        if (offset < s.Length)
                         {
-                            // Эта колонка имеет продолжение - пишем его
-                            int length = Math.Min(XmlConstants.MaxCellTextLength, text.Length - offset);
-                            rowData[header] = text.Substring(offset, length);
+                            var len = System.Math.Min(XmlConstants.MaxCellTextLength, s.Length - offset);
+                            row[header] = s.Substring(offset, len);
                         }
                         else
                         {
-                            // Все остальные колонки - пустые
-                            rowData[header] = string.Empty;
+                            row[header] = string.Empty;
                         }
                     }
                 }
-
-                batch.Add(rowData);
-            }
-            stringsUsed += maxChunks;
-
-            if (stringsUsed >= XmlConstants.ExcelMaxRows - 100)
-            {
-                sheetIndex += 1;
-                stringsUsed = 0;
-                yield return (batch, $"Sheet{sheetIndex}");
-                batch = new List<Dictionary<string, object>>();
+                else
+                {
+                    row[header] = isFirstChunk ? value : string.Empty;
+                }
             }
 
-            if (batch.Count >= XmlConstants.BatchSize)
-            {
-                stringsUsed = 0;
-                yield return (batch, $"Sheet{sheetIndex}");
-                batch = new List<Dictionary<string, object>>();
-            }
+            yield return row;
         }
+    }
 
-        if (batch.Count > 0)
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static object? NormalizeValue(object? value)
+    {
+        return value switch
         {
-            yield return (batch, $"Sheet{sheetIndex}");
-        }
+            null => null,
+            string s => s,
+            bool b => b,
+            byte _ => value,
+            sbyte _ => value,
+            short _ => value,
+            ushort _ => value,
+            int _ => value,
+            uint _ => value,
+            long _ => value,
+            ulong _ => value,
+            float _ => value,
+            double _ => value,
+            decimal _ => value,
+            System.DateTime _ => value,
+            System.DateTimeOffset _ => value,
+            System.Guid g => g.ToString(),
+            _ => JsonSerializer.Serialize(value, JsonSerializerOptions.Default)
+        };
     }
 
     private static Func<object, object?>[] GetAccessors<T>(IReadOnlyList<ExcelColumn> columns)
     {
-        var key = (typeof(T), string.Join("|", columns.Select(c => c.Name)));
-
+        var key = (typeof(T), string.Join('|', columns.Select(c => c.Name)));
         return _accessors.GetOrAdd(key, _ =>
         {
             var props = typeof(T)
@@ -183,10 +285,18 @@ public sealed class AbankingMiniExcelWriter : IXmlWriter
                 .ToDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
 
             return columns.Select(col =>
-                props.TryGetValue(col.Name, out var prop)
-                    ? (Func<object, object?>)(obj => prop.GetValue(obj))
-                    : static _ => null
-            ).ToArray();
+            {
+                if (props.TryGetValue(col.Name, out var prop))
+                {
+                    var param = System.Linq.Expressions.Expression.Parameter(typeof(object), "obj");
+                    var cast = System.Linq.Expressions.Expression.Convert(param, typeof(T));
+                    var property = System.Linq.Expressions.Expression.Property(cast, prop);
+                    var convert = System.Linq.Expressions.Expression.Convert(property, typeof(object));
+                    var lambda = System.Linq.Expressions.Expression.Lambda<Func<object, object?>>(convert, param);
+                    return lambda.Compile();
+                }
+                return static _ => null;
+            }).ToArray();
         });
     }
 }
